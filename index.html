@@ -3,106 +3,224 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>«Go Bet Me»</title>
+<title>Go Bet Me</title>
 <style>
-  body { margin:0; background:#111; color:#fff; font-family:system-ui,sans-serif; text-align:center; }
-  #wrap { position:relative; display:inline-block; max-width:100%; }
-  video, canvas { max-width:100%; width:640px; transform:scaleX(-1); }
-  canvas { position:absolute; left:0; top:0; }
-  #count { font-size:64px; font-weight:700; margin:8px 0 0; }
-  #hint { font-size:22px; min-height:32px; color:#ffb020; }
-  button { font-size:18px; padding:12px 24px; border:0; border-radius:8px; background:#2ecc71; color:#000; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:12px; background:#111; color:#fff; font-family:system-ui,sans-serif; text-align:center; }
+  h1 { margin:8px 0 2px; }
+  .sub { color:#9aa; margin:0 0 12px; }
+  .menu { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin:10px 0; }
+  button { font-size:18px; padding:12px 22px; border:0; border-radius:10px; background:#2ecc71; color:#000; cursor:pointer; }
+  button.sec { background:#333; color:#fff; }
+  #howto { color:#9aa; font-size:14px; max-width:520px; margin:6px auto; }
+  #stage { display:none; }
+  #count { font-size:72px; font-weight:700; line-height:1.1; margin:4px 0 0; }
+  #unit { color:#9aa; margin-bottom:4px; }
+  #hint { font-size:22px; min-height:34px; margin:4px 0 8px; }
+  #hint.warn { color:#ffb020; }
+  #hint.ok { color:#2ecc71; }
+  #wrap { position:relative; display:inline-block; width:100%; max-width:640px; }
+  video, canvas { width:100%; transform:scaleX(-1); display:block; }
+  canvas { position:absolute; left:0; top:0; height:100%; }
+  #summary { display:none; max-width:420px; margin:20px auto; padding:20px; background:#1b1b1b; border-radius:14px; text-align:left; }
+  #summary h2 { margin-top:0; text-align:center; }
+  #summary .row { display:flex; justify-content:space-between; margin:8px 0; }
+  #summary .tip { margin-top:14px; padding:10px; background:#2a2210; border-radius:8px; color:#ffb020; }
 </style>
 </head>
 <body>
-<h2>Go Bet Me</h2>
-<button id="start">Включить камеру</button>
-<div id="count">0</div>
-<div id="hint">Встань боком к камере: плечи, таз и ноги в кадре</div>
-<div id="wrap"><video id="v" playsinline muted></video><canvas id="c"></canvas></div>
+<h1>Go Bet Me</h1>
+<p class="sub">Докажи, что сможешь: ИИ считает по камере</p>
+
+<div id="menu">
+  <div class="menu">
+    <button data-ex="pushup">Отжимания</button>
+    <button data-ex="squat">Приседания</button>
+    <button data-ex="plank">Планка</button>
+  </div>
+  <div id="howto">Отжимания и планка: поставь камеру сбоку на уровне пола.<br>Приседания: встань боком к камере. Всё тело должно быть в кадре.</div>
+</div>
+
+<div id="stage">
+  <div id="count">0</div>
+  <div id="unit">повторы</div>
+  <div id="hint">Загружаю модель...</div>
+  <div id="wrap"><video id="v" playsinline muted></video><canvas id="c"></canvas></div>
+  <div class="menu"><button id="finish">Завершить</button></div>
+</div>
+
+<div id="summary"></div>
 
 <script type="module">
 import { PoseLandmarker, FilesetResolver, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-const video = document.getElementById("v");
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-const countEl = document.getElementById("count");
-const hintEl = document.getElementById("hint");
+// ---------- Настройки (сюда подгоняем пороги) ----------
+const T = {
+  pushDown: 90, pushUp: 160, pushHalfMax: 140, bodyLine: 155,
+  squatDown: 100, squatUp: 160, squatHalfMax: 150, leanMax: 60,
+  plankLine: 165, plankGoal: 30
+};
 
-let landmarker, reps = 0;
-let stage = "up";          // up | down
-let minAngle = 180;        // самый низкий угол локтя в текущем повторе
-let errors = {};           // счётчик ошибок для итогов
-let lastHintTime = 0;
+const EX = {
+  pushup: { name: "Отжимания", unit: "повторы" },
+  squat:  { name: "Приседания", unit: "повторы" },
+  plank:  { name: "Планка", unit: "секунды" }
+};
 
+// Текст подсказок режима «Ошибка»
+const MSG = {
+  frame: "Отойди дальше: всё тело должно быть в кадре",
+  pushHalf: "Опустись ниже: локоть должен согнуться до 90°",
+  pushHips: "Таз провис или задран: держи корпус ровной линией",
+  squatHalf: "Сядь глубже: согни колени до 100°",
+  knees: "Колени вышли за носки: отведи таз назад",
+  back: "Держи спину прямее: не наклоняйся вперёд",
+  sag: "Таз провис: подтяни его к линии плеч",
+  pike: "Таз задран: опусти его к линии плеч",
+  plankPose: "Прими позу планки: тело горизонтально, опора на предплечья"
+};
+
+// ---------- Элементы ----------
+const $ = id => document.getElementById(id);
+const video = $("v"), canvas = $("c"), ctx = canvas.getContext("2d");
+const countEl = $("count"), unitEl = $("unit"), hintEl = $("hint");
+let landmarker, drawer, current = null, running = false;
+
+// ---------- Состояние упражнения ----------
+let reps, seconds, stage, minAngle, errors, lastErr, lastT;
+function resetState() {
+  reps = 0; seconds = 0; stage = "up"; minAngle = 180;
+  errors = {}; lastErr = {}; lastT = performance.now();
+  countEl.textContent = "0";
+}
+
+// ---------- Геометрия ----------
 function angle(a, b, c) {
   const r = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-  let d = Math.abs(r * 180 / Math.PI);
+  const d = Math.abs(r * 180 / Math.PI);
   return d > 180 ? 360 - d : d;
 }
+const LEFT  = { sh: 11, el: 13, wr: 15, hip: 23, knee: 25, ank: 27, toe: 31 };
+const RIGHT = { sh: 12, el: 14, wr: 16, hip: 24, knee: 26, ank: 28, toe: 32 };
+function pickSide(lm) {
+  const score = m => Object.values(m).reduce((s, i) => s + (lm[i].visibility || 0), 0);
+  const m = score(LEFT) >= score(RIGHT) ? LEFT : RIGHT;
+  const p = {};
+  for (const k in m) p[k] = lm[m[k]];
+  return p;
+}
+// точка должна быть видна И лежать внутри кадра (MediaPipe «додумывает» точки за кадром)
+function inFrame(p, keys) {
+  return keys.every(k => {
+    const q = p[k];
+    return (q.visibility || 0) > 0.5 && q.x > 0.01 && q.x < 0.99 && q.y > 0.01 && q.y < 0.99;
+  });
+}
 
+// ---------- Подсказки ----------
 function hint(text, key) {
   hintEl.textContent = text;
-  if (key && Date.now() - lastHintTime > 1500) {
-    errors[key] = (errors[key] || 0) + 1;   // потом покажем в итогах самую частую
-    lastHintTime = Date.now();
-  }
-}
-
-function analyze(lm) {
-  // выбираем сторону, которая лучше видна камере
-  const L = [11, 13, 15, 23, 27], R = [12, 14, 16, 24, 28];
-  const vis = ids => ids.reduce((s, i) => s + (lm[i].visibility || 0), 0);
-  const [sh, el, wr, hip, ank] = (vis(L) >= vis(R) ? L : R).map(i => lm[i]);
-  const visible = [sh, el, wr, hip, ank].every(p => (p.visibility || 0) > 0.5);
-
-  if (!visible) return hint("Отойди дальше: плечи, таз и ноги должны быть в кадре", "frame");
-
-  const elbow = angle(sh, el, wr);
-  const body = angle(sh, hip, ank);
-  minAngle = Math.min(minAngle, elbow);
-
-  if (body < 155 && stage === "down") hint("Таз провис или задран: держи корпус ровной линией", "hips");
-  else if (body < 155) hint("Держи корпус ровной линией от плеч до пяток", "hips");
-
-  if (elbow < 90 && stage === "up") {
-    stage = "down";
-  } else if (elbow > 160 && stage === "down") {
-    stage = "up";
-    if (minAngle < 90) {
-      reps++;
-      countEl.textContent = reps;
-      if (body >= 155) hint("Засчитано!");
+  hintEl.className = key ? "warn" : "ok";
+  if (key) {
+    const now = Date.now();
+    if (!lastErr[key] || now - lastErr[key] > 1500) {
+      errors[key] = (errors[key] || 0) + 1;
+      lastErr[key] = now;
     }
-    minAngle = 180;
-  } else if (elbow > 160 && stage === "up" && minAngle < 140 && minAngle >= 90) {
-    // дошёл до половины и вернулся — полуповтор
-    hint("Опустись ниже: локоть должен согнуться до 90°", "half");
+  }
+}
+function info(text) { hintEl.textContent = text; hintEl.className = ""; }
+
+// ---------- Упражнения ----------
+function pushup(p) {
+  const elbow = angle(p.sh, p.el, p.wr);
+  const body = angle(p.sh, p.hip, p.ank);
+  minAngle = Math.min(minAngle, elbow);
+  if (body < T.bodyLine) hint(MSG.pushHips, "pushHips");
+
+  if (elbow < T.pushDown && stage === "up") {
+    stage = "down";
+  } else if (elbow > T.pushUp && stage === "down") {
+    stage = "up"; reps++; countEl.textContent = reps; minAngle = 180;
+    if (body >= T.bodyLine) hint("Засчитано!");
+  } else if (elbow > T.pushUp && stage === "up") {
+    if (minAngle < T.pushHalfMax && minAngle >= T.pushDown) hint(MSG.pushHalf, "pushHalf");
     minAngle = 180;
   }
 }
 
-async function loop() {
+function squat(p) {
+  const knee = angle(p.hip, p.knee, p.ank);
+  const lean = Math.atan2(Math.abs(p.sh.x - p.hip.x), Math.abs(p.hip.y - p.sh.y)) * 180 / Math.PI;
+  const dir = Math.sign(p.toe.x - p.ank.x) || 1;   // в какую сторону смотрит стопа
+  minAngle = Math.min(minAngle, knee);
+
+  if (stage === "down") {
+    if ((p.knee.x - p.toe.x) * dir > 0.02) hint(MSG.knees, "knees");
+    if (lean > T.leanMax) hint(MSG.back, "back");
+  }
+  if (knee < T.squatDown && stage === "up") {
+    stage = "down";
+  } else if (knee > T.squatUp && stage === "down") {
+    stage = "up"; reps++; countEl.textContent = reps; minAngle = 180;
+    hint("Засчитано!");
+  } else if (knee > T.squatUp && stage === "up") {
+    if (minAngle < T.squatHalfMax && minAngle >= T.squatDown) hint(MSG.squatHalf, "squatHalf");
+    minAngle = 180;
+  }
+}
+
+function plank(p, dt) {
+  const dx = p.ank.x - p.sh.x, dy = p.ank.y - p.sh.y;
+  if (Math.abs(dy) > 0.4 * Math.abs(dx)) { info(MSG.plankPose); return; }
+  const body = angle(p.sh, p.hip, p.ank);
+  // где должна быть линия плечо-лодыжка на уровне таза
+  const yLine = Math.abs(dx) < 0.05 ? p.hip.y : p.sh.y + dy * (p.hip.x - p.sh.x) / dx;
+  if (body >= T.plankLine) {
+    seconds += dt;
+    countEl.textContent = Math.floor(seconds);
+    hint(seconds >= T.plankGoal ? "Цель выполнена! Можно завершать" : "Отлично, держи ровно");
+  } else if (p.hip.y > yLine) hint(MSG.sag, "sag");
+  else hint(MSG.pike, "pike");
+}
+
+const NEED = {
+  pushup: ["sh", "el", "wr", "hip", "ank"],
+  squat:  ["sh", "hip", "knee", "ank", "toe"],
+  plank:  ["sh", "hip", "ank"]
+};
+
+// ---------- Главный цикл ----------
+function loop() {
+  if (!running) return;
   if (video.readyState >= 2) {
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
     const res = landmarker.detectForVideo(video, performance.now());
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const now = performance.now(), dt = (now - lastT) / 1000; lastT = now;
+
     if (res.landmarks.length) {
-      const du = new DrawingUtils(ctx);
-      du.drawLandmarks(res.landmarks[0], { radius: 3 });
-      du.drawConnectors(res.landmarks[0], PoseLandmarker.POSE_CONNECTIONS);
-      analyze(res.landmarks[0]);
+      const lm = res.landmarks[0];
+      drawer.drawLandmarks(lm, { radius: 3 });
+      drawer.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS);
+      const p = pickSide(lm);
+      if (!inFrame(p, NEED[current])) {
+        hint(MSG.frame);           // не считаем и не засчитываем как ошибку
+        stage = "up"; minAngle = 180;
+      } else if (current === "pushup") pushup(p);
+      else if (current === "squat") squat(p);
+      else plank(p, dt);
     } else {
-      hint("Тебя не видно: встань в кадр");
+      info("Тебя не видно: встань в кадр");
     }
   }
   requestAnimationFrame(loop);
 }
 
-document.getElementById("start").onclick = async () => {
-  hintEl.textContent = "Загружаю модель...";
+// ---------- Экраны ----------
+async function ensureModel() {
+  if (landmarker) return;
   const fileset = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   landmarker = await PoseLandmarker.createFromOptions(fileset, {
@@ -112,11 +230,55 @@ document.getElementById("start").onclick = async () => {
     },
     runningMode: "VIDEO", numPoses: 1
   });
+  drawer = new DrawingUtils(ctx);
+}
+async function ensureCamera() {
+  if (video.srcObject) return;
   video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
   await video.play();
-  hintEl.textContent = "Готово, начинай отжиматься";
+}
+
+async function startExercise(ex) {
+  current = ex;
+  $("menu").style.display = "none";
+  $("summary").style.display = "none";
+  $("stage").style.display = "block";
+  unitEl.textContent = EX[ex].unit;
+  resetState();
+  info("Загружаю модель и камеру...");
+  try {
+    await ensureModel();
+    await ensureCamera();
+  } catch (e) {
+    info("Не удалось включить камеру: разреши доступ в браузере");
+    return;
+  }
+  info("Готово, начинай: " + EX[ex].name.toLowerCase());
+  lastT = performance.now();
+  running = true;
   loop();
-};
+}
+
+function finish() {
+  running = false;
+  $("stage").style.display = "none";
+  const total = Object.values(errors).reduce((a, b) => a + b, 0);
+  const top = Object.entries(errors).sort((a, b) => b[1] - a[1])[0];
+  const result = current === "plank" ? Math.floor(seconds) + " сек" : reps + " повт.";
+  $("summary").innerHTML =
+    `<h2>Итоги: ${EX[current].name}</h2>
+     <div class="row"><span>Результат</span><b>${result}</b></div>
+     <div class="row"><span>Замечаний по технике</span><b>${total}</b></div>
+     ${top ? `<div class="tip">Чаще всего: ${MSG[top[0]]} (${top[1]} раз)</div>`
+           : `<div class="tip" style="background:#10241a;color:#2ecc71">Техника чистая, ошибок не найдено</div>`}
+     <div class="menu"><button id="again">Ещё раз</button><button id="back" class="sec">В меню</button></div>`;
+  $("summary").style.display = "block";
+  $("again").onclick = () => startExercise(current);
+  $("back").onclick = () => { $("summary").style.display = "none"; $("menu").style.display = "block"; };
+}
+
+document.querySelectorAll("[data-ex]").forEach(b => b.onclick = () => startExercise(b.dataset.ex));
+$("finish").onclick = finish;
 </script>
 </body>
 </html>
