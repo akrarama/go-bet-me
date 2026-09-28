@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>«Go Bet Me»</title>
+<style>
+  body { margin:0; background:#111; color:#fff; font-family:system-ui,sans-serif; text-align:center; }
+  #wrap { position:relative; display:inline-block; max-width:100%; }
+  video, canvas { max-width:100%; width:640px; transform:scaleX(-1); }
+  canvas { position:absolute; left:0; top:0; }
+  #count { font-size:64px; font-weight:700; margin:8px 0 0; }
+  #hint { font-size:22px; min-height:32px; color:#ffb020; }
+  button { font-size:18px; padding:12px 24px; border:0; border-radius:8px; background:#2ecc71; color:#000; }
+</style>
+</head>
+<body>
+<h2>Go Bet Me</h2>
+<button id="start">Включить камеру</button>
+<div id="count">0</div>
+<div id="hint">Встань боком к камере: плечи, таз и ноги в кадре</div>
+<div id="wrap"><video id="v" playsinline muted></video><canvas id="c"></canvas></div>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+const video = document.getElementById("v");
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const countEl = document.getElementById("count");
+const hintEl = document.getElementById("hint");
+
+let landmarker, reps = 0;
+let stage = "up";          // up | down
+let minAngle = 180;        // самый низкий угол локтя в текущем повторе
+let errors = {};           // счётчик ошибок для итогов
+let lastHintTime = 0;
+
+function angle(a, b, c) {
+  const r = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+  let d = Math.abs(r * 180 / Math.PI);
+  return d > 180 ? 360 - d : d;
+}
+
+function hint(text, key) {
+  hintEl.textContent = text;
+  if (key && Date.now() - lastHintTime > 1500) {
+    errors[key] = (errors[key] || 0) + 1;   // потом покажем в итогах самую частую
+    lastHintTime = Date.now();
+  }
+}
+
+function analyze(lm) {
+  // выбираем сторону, которая лучше видна камере
+  const L = [11, 13, 15, 23, 27], R = [12, 14, 16, 24, 28];
+  const vis = ids => ids.reduce((s, i) => s + (lm[i].visibility || 0), 0);
+  const [sh, el, wr, hip, ank] = (vis(L) >= vis(R) ? L : R).map(i => lm[i]);
+  const visible = [sh, el, wr, hip, ank].every(p => (p.visibility || 0) > 0.5);
+
+  if (!visible) return hint("Отойди дальше: плечи, таз и ноги должны быть в кадре", "frame");
+
+  const elbow = angle(sh, el, wr);
+  const body = angle(sh, hip, ank);
+  minAngle = Math.min(minAngle, elbow);
+
+  if (body < 155 && stage === "down") hint("Таз провис или задран: держи корпус ровной линией", "hips");
+  else if (body < 155) hint("Держи корпус ровной линией от плеч до пяток", "hips");
+
+  if (elbow < 90 && stage === "up") {
+    stage = "down";
+  } else if (elbow > 160 && stage === "down") {
+    stage = "up";
+    if (minAngle < 90) {
+      reps++;
+      countEl.textContent = reps;
+      if (body >= 155) hint("Засчитано!");
+    }
+    minAngle = 180;
+  } else if (elbow > 160 && stage === "up" && minAngle < 140 && minAngle >= 90) {
+    // дошёл до половины и вернулся — полуповтор
+    hint("Опустись ниже: локоть должен согнуться до 90°", "half");
+    minAngle = 180;
+  }
+}
+
+async function loop() {
+  if (video.readyState >= 2) {
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    const res = landmarker.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (res.landmarks.length) {
+      const du = new DrawingUtils(ctx);
+      du.drawLandmarks(res.landmarks[0], { radius: 3 });
+      du.drawConnectors(res.landmarks[0], PoseLandmarker.POSE_CONNECTIONS);
+      analyze(res.landmarks[0]);
+    } else {
+      hint("Тебя не видно: встань в кадр");
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+document.getElementById("start").onclick = async () => {
+  hintEl.textContent = "Загружаю модель...";
+  const fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO", numPoses: 1
+  });
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+  await video.play();
+  hintEl.textContent = "Готово, начинай отжиматься";
+  loop();
+};
+</script>
+</body>
+</html>
