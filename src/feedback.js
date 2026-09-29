@@ -14,14 +14,17 @@
 // feedback.clearNow()   убрать сразу (смена экрана)
 // feedback.say(text, code | { code, priority })  только озвучка, без спама: тот же code не чаще
 //   раза в 6 с, и пока звучит подсказка важнее, младшая молчит. say без priority
-//   (отсчёт, финал) звучит всегда и перебивает подсказку.
+//   звучит всегда и перебивает подсказку. Голос выключен (APP.voice = false): say молчит.
+// Звук: показанная подсказка уровня warn играет sound.play('error'), один code не чаще раза в 1.5 с.
 // feedback.highlight    Set индексов, которые draw.js красит красным
 //
-// createFeedback(env) даёт отдельный экземпляр с подменой часов, таймеров и голоса (тесты в jsc).
+// createFeedback(env) даёт отдельный экземпляр с подменой часов, таймеров, голоса и звука (тесты в jsc).
 
-import { REPS } from './config.js';
+import { APP, REPS } from './config.js';
+import { sound } from './sound.js';
 
 const SPEAK_REPEAT_MS = 6000;
+const CUE_REPEAT_MS = 1500;
 const OUT_MS = 220; // длина анимации ухода (styles/exercises.css, .hint.is-out)
 
 const browserEnv = {
@@ -30,8 +33,10 @@ const browserEnv = {
     const id = setTimeout(fn, ms);
     return () => globalThis.clearTimeout?.(id);
   },
+  voice: () => APP.voice,
   synth: () => globalThis.speechSynthesis ?? null,
   utterance: (text) => new SpeechSynthesisUtterance(text),
+  sound: (name) => sound.play(name),
 };
 
 export function createFeedback(env = browserEnv) {
@@ -43,6 +48,16 @@ export function createFeedback(env = browserEnv) {
   let voiceBusy = null; // { priority, until }: что сейчас звучит
   let audioUnlocked = false;
   const spokenAt = new Map();
+  const cuedAt = new Map();
+
+  /** Звук ошибки на показанную warn-подсказку, один code не чаще CUE_REPEAT_MS. */
+  function cue(code, level, speak) {
+    if (level !== 'warn' || !speak || !env.sound) return;
+    const now = env.now();
+    if (now - (cuedAt.get(code) ?? -Infinity) < CUE_REPEAT_MS) return;
+    cuedAt.set(code, now);
+    env.sound('error');
+  }
 
   /** Когда текущая подсказка уходит сама: Infinity = пока не позовут clear. */
   const deadline = (h) => {
@@ -124,6 +139,7 @@ export function createFeedback(env = browserEnv) {
         api.highlight = new Set(joints);
         if (changed) {
           render();
+          cue(code, level, speak);
           if (speak) api.say(text, { code, priority });
         }
         arm();
@@ -134,6 +150,7 @@ export function createFeedback(env = browserEnv) {
       api.highlight = new Set(joints);
       render();
       arm();
+      cue(code, level, speak);
       if (speak) api.say(text, { code, priority });
       return true;
     },
@@ -156,6 +173,7 @@ export function createFeedback(env = browserEnv) {
     /** Озвучка. @returns {boolean} прозвучит ли */
     say(text, opts) {
       const { code = text, priority = Infinity } = typeof opts === 'string' ? { code: opts } : opts ?? {};
+      if (!env.voice?.()) return false;
       const synth = env.synth();
       if (!synth) return false;
       const now = env.now();
@@ -179,7 +197,7 @@ export function createFeedback(env = browserEnv) {
 
     /** Браузер разрешает звук только после первого касания/клавиши. main.js вызывает это сам. */
     unlockAudio() {
-      if (audioUnlocked) return;
+      if (audioUnlocked || !env.voice?.()) return;
       audioUnlocked = true;
       try {
         const u = env.utterance(' ');

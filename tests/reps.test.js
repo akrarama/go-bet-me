@@ -130,10 +130,11 @@ const rep = (make, top, bottom, ms = 1600) => seq(make, [0, top], [ms / 2, botto
 const hold = (lm, n) => Array.from({ length: n }, () => lm);
 
 /** Среда: часы, отложенные таймеры и голос для feedback, шина с журналом. */
-function setup(mod, { target = 10 } = {}) {
+function setup(mod, { target = 10, voice = false } = {}) {
   let now = 0;
   let timers = [];
   const spoken = [];
+  const sounds = [];
   const synth = { speaking: false, speak: (u) => spoken.push(u.text), cancel() {}, getVoices: () => [] };
   const env = {
     now: () => now,
@@ -142,8 +143,10 @@ function setup(mod, { target = 10 } = {}) {
       timers.push(tm);
       return () => (timers = timers.filter((x) => x !== tm));
     },
+    voice: () => voice,
     synth: () => synth,
     utterance: (text) => ({ text }),
+    sound: (name) => sounds.push(name),
   };
   const feedback = createFeedback(env);
   const events = [];
@@ -172,7 +175,7 @@ function setup(mod, { target = 10 } = {}) {
   };
   ctrl?.start(0);
   const of = (type) => events.filter((e) => e.type === type);
-  return { ctrl, feedback, events, of, spoken, clock, feed, synth, get t() { return t; } };
+  return { ctrl, feedback, events, of, spoken, sounds, clock, feed, synth, get t() { return t; } };
 }
 
 const STAND = { knee: 176, shin: 4, lean: 4 };
@@ -461,6 +464,141 @@ export default (t) => {
     a.eq(s.ctrl.count, 1);
     a.deep(s.of('fault').map((e) => e.code), ['pushup_tempo']);
     a.eq(s.of('fault')[0].text, 'Слишком быстро, контролируй опускание');
+  });
+
+
+  // ─── Подсказки (feedback.js) ───
+  t.test('подсказка: старшая вытесняет сразу, младшая ждёт', (a) => {
+    const s = setup(null);
+    const fb = s.feedback;
+    a.eq(fb.hint('темп', { code: 'tempo', priority: PRIORITY.tempo }), true);
+    a.eq(fb.hint('форма', { code: 'form', priority: PRIORITY.form, joints: [23] }), true, 'форма старше темпа');
+    a.eq(fb.current.code, 'form');
+    a.deep([...fb.highlight], [23]);
+    s.clock.to(5000);
+    a.eq(fb.hint('глубина', { code: 'depth', priority: PRIORITY.depth }), false, 'младшая не вытесняет висящую старшую');
+    a.eq(fb.hint('видимость', { code: 'vis', priority: PRIORITY.visibility }), true);
+    a.deep([...fb.highlight], [], 'суставы от новой подсказки');
+  });
+
+  t.test('подсказка: не короче 1.5 с, даже если правило уже исправили', (a) => {
+    const s = setup(null);
+    const fb = s.feedback;
+    fb.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    s.clock.to(400);
+    fb.clear('sag');
+    a.eq(fb.current?.code, 'sag', 'через 0.4 с ещё видна');
+    s.clock.to(1499);
+    a.eq(fb.current?.code, 'sag');
+    s.clock.to(1502);
+    a.eq(fb.current, null, 'ушла ровно после 1.5 с');
+  });
+
+  t.test('подсказка: той же важности ждёт 1.5 с, потом сменяет', (a) => {
+    const s = setup(null);
+    const fb = s.feedback;
+    fb.hint('раз', { code: 'a', priority: 2 });
+    s.clock.to(1000);
+    a.eq(fb.hint('два', { code: 'b', priority: 2 }), false);
+    s.clock.to(1600);
+    a.eq(fb.hint('два', { code: 'b', priority: 2 }), true);
+  });
+
+  t.test('подсказка: разовая уходит сама через ttl, тот же code обновляет текст', (a) => {
+    const s = setup(null);
+    const fb = s.feedback;
+    fb.hint('локоть 115°', { code: 'half', priority: 2, ttl: 2600 });
+    s.clock.to(1000);
+    fb.hint('локоть 120°', { code: 'half', priority: 2, ttl: 2600 });
+    a.eq(fb.current.text, 'локоть 120°');
+    s.clock.to(3500);
+    a.eq(fb.current?.code, 'half', 'ttl считается от последнего вызова');
+    s.clock.to(3700);
+    a.eq(fb.current, null);
+  });
+
+  t.test('звук: warn-подсказка играет ошибку, один code не чаще 1.5 с, info молчит', (a) => {
+    const s = setup(null);
+    const fb = s.feedback;
+    fb.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    for (let ms = 33; ms < 1400; ms += 33) {
+      s.clock.to(ms);
+      fb.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    }
+    a.deep(s.sounds, ['error'], 'подсказка висит: звук один раз');
+    fb.clearNow();
+    s.clock.to(1450);
+    fb.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    a.eq(s.sounds.length, 1, 'снова тот же code раньше 1.5 с: без звука');
+    fb.clearNow();
+    s.clock.to(3200);
+    fb.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    a.eq(s.sounds.length, 2);
+    fb.clearNow();
+    fb.hint('встань в упор', { code: 'gate', priority: 4, level: 'info' });
+    a.eq(s.sounds.length, 2, 'info без звука');
+  });
+
+  t.test('голос выключен: say молчит', (a) => {
+    const s = setup(null);
+    a.eq(s.feedback.say('Старт'), false);
+    s.feedback.hint('таз', { code: 'sag', priority: 3, level: 'warn' });
+    a.deep(s.spoken, []);
+  });
+
+  t.test('голос включён: без спама по коду и по важности', (a) => {
+    const s = setup(null, { voice: true });
+    const fb = s.feedback;
+    a.eq(fb.say('таз', { code: 'sag', priority: 3 }), true);
+    s.synth.speaking = true;
+    s.clock.to(300);
+    a.eq(fb.say('темп', { code: 'tempo', priority: 1 }), false, 'младшая не перебивает');
+    a.eq(fb.say('не видно', { code: 'vis', priority: 4 }), true, 'старшая перебивает');
+    a.eq(fb.say('3', '3'), true, 'системная фраза звучит всегда');
+    s.synth.speaking = false;
+    s.clock.to(2000);
+    a.eq(fb.say('таз', { code: 'sag', priority: 3 }), false, 'тот же код раньше 6 с');
+    s.clock.to(6100);
+    a.eq(fb.say('таз', { code: 'sag', priority: 3 }), true);
+    a.deep(s.spoken, ['таз', 'не видно', '3', 'таз']);
+  });
+
+  t.test('подсказка в упражнении: суставы правила красные, после исправления гаснут', (a) => {
+    const s = setup(pushup);
+    s.feed(hold(pushupPose(TOP), 10));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    a.eq(s.feedback.current?.text, 'Таз провисает, напряги живот, выровняй тело');
+    a.deep([...s.feedback.highlight], [23]);
+    s.feed(hold(pushupPose(TOP), 70));
+    a.eq(s.feedback.current, null);
+    a.eq(s.feedback.highlight.size, 0);
+  });
+
+  t.test('приоритет: видимость важнее формы', (a) => {
+    const s = setup(pushup);
+    s.feed(hold(pushupPose(TOP), 10));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    a.eq(s.feedback.current?.code, 'hip_sag');
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07, vis: 0.3, farVis: 0.2 }), 12));
+    a.eq(s.feedback.current?.code, 'visibility');
+  });
+
+  t.test('приоритет: форма важнее глубины, глубина важнее темпа', (a) => {
+    const s = setup(pushup);
+    s.feed(hold(pushupPose(TOP), 10));
+    // таз провис всё время, и повтор мелкий: на экране форма, в логе причина тоже форма
+    s.feed(rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, { elbow: 112 }, 1400));
+    a.eq(s.feedback.current?.code, 'hip_sag');
+    a.deep(s.of('rejected').map((e) => e.code), ['hip_sag']);
+    a.ok(s.of('fault').some((e) => e.code === 'pushup_half_down'), 'глубина всё равно посчитана в ошибках');
+    // быстрый повтор сразу после мелкого: на экране глубина, темп ждёт
+    const q = setup(pushup);
+    q.feed(hold(pushupPose(TOP), 10));
+    q.feed(rep(pushupPose, TOP, { elbow: 112 }, 1000));
+    q.feed(seq(pushupPose, [0, TOP], [450, LOW], [650, TOP]));
+    q.feed(hold(pushupPose(TOP), 6));
+    a.eq(q.feedback.current?.code, 'pushup_half_down');
+    a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
   });
 
   // ─── Итоги ───
