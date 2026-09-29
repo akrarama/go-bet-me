@@ -86,11 +86,22 @@ export const GESTURES = {
 export const MONEY = {
   APP_FEE: 0.1, // комиссия приложения, менять только здесь
   startBalance: 100,
-  storageKey: 'protiv:v1',
+  storageKey: 'protiv:v1', // wallet.js добавляет путь страницы: у каждой копии на localhost свой кошелёк
+  historyMax: 30, // сколько записей истории хранить
+  // female: глаголы в репликах и тостах в женском роде («поставила»)
   bots: [
     { id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5 },
-    { id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5 },
+    { id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5, female: true },
   ],
+  botDelayMs: [1000, 2000], // бот приходит через 1-2 с после входа в LOBBY или после предыдущего бота
+  feed: {
+    max: 4, // реплик в ленте одновременно
+    ttlMs: 9000, // реплика гаснет через столько
+    gapMs: 1800, // между репликами не меньше
+    repsEvery: 5, // реплика каждые 5 повторов
+    secondsEvery: 15, // в медитации: каждые 15 с
+    faultCooldownMs: 5000, // подкол на ошибку не чаще
+  },
 };
 
 // ─── Блок 4: Медитация ──────────────────────────────────────────
