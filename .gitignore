@@ -141,3 +141,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Против: локальные файлы
+.DS_Store
+fixtures/
+*.mov
+*.mp4
+*.webm
