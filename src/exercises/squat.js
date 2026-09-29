@@ -1,6 +1,7 @@
 // Приседания. Владелец: блок 1 (Упражнения).
 // Счёт по углу колена таз-колено-щиколотка: UP и угол < 100 → DOWN, DOWN и угол > 160 → повтор.
-// Считаем только стоя на полу: плечи над тазом, щиколотки не выше своей линии пола.
+// Считаем только стоя на полу и боком к камере: плечи над тазом, щиколотки не выше
+// своей линии пола; лицом к камере угол колена в кадре почти не меняется, поэтому просим повернуться.
 // Прыжок сразу сбрасывает начатый повтор, новый начинается только из стойки:
 // прыжки и приземление в присед не считаются.
 // Режим «Ошибка» (раздел 6 спеки, пороги в config.REPS.squat), камера сбоку:
@@ -67,7 +68,21 @@ export const RULES = {
 export const GATES = {
   jump: { hint: 'Прыжки не в счёт, приседай, не отрывая стопы от пола' },
   stand: { hint: 'Встань прямо, боком к камере' },
+  front: { hint: 'Повернись боком к камере, так видно колени и спину' },
 };
+
+/** Стоит лицом к камере или боком: ширина плеч в кадре к длине корпуса, с запасом от дрожания. */
+export function createView(cfg = REPS.squat) {
+  let front = false;
+  return {
+    update(span) {
+      if (span == null) return front;
+      if (!front && span > cfg.frontSpan) front = true;
+      else if (front && span < cfg.sideSpan) front = false;
+      return front;
+    },
+  };
+}
 
 /**
  * Линия пола по щиколоткам (y растёт вниз, пол = самое низкое положение стоп).
@@ -126,24 +141,33 @@ export function measure({ lm, idx, aspect, sm, cfg = REPS.squat }) {
   // правило про носки имеет смысл только сбоку: стопа видна и заметно смотрит вбок
   const sideOn = (toe.visibility ?? 0) >= REPS.minVisibility && shin > 0 && Math.abs(foot) >= cfg.sideFootMin * shin;
   const lean = sm('lean', tiltFromVertical(hip, shoulder, aspect));
+  // ширина плеч к длине корпуса: сбоку плечи почти совпадают, лицом к камере широко
+  const mid = (i, j) => ({ x: (lm[i].x + lm[j].x) / 2, y: (lm[i].y + lm[j].y) / 2 });
+  const torso = dist(mid(POSE.leftShoulder, POSE.rightShoulder), mid(POSE.leftHip, POSE.rightHip), aspect);
+  const span = torso > 0 ? (Math.abs(lm[POSE.leftShoulder].x - lm[POSE.rightShoulder].x) * aspect) / torso : null;
   return {
     angle: angle(hip, knee, ankle, aspect),
     kneeOver: sm('kneeOver', sideOn ? ((knee.x - toe.x) * aspect * Math.sign(foot)) / shin : null),
     lean,
     upright: shoulder.y < hip.y && lean < cfg.uprightMaxLean,
+    span: sm('span', span),
   };
 }
 
 export function createController(deps) {
   const cfg = REPS.squat;
   const floor = createFloor(cfg);
+  const view = createView(cfg);
   return createRepController(deps, {
     cfg,
     sideKeys: ['shoulder', 'hip', 'knee', 'ankle'],
     visible: ['shoulder', 'hip', 'knee', 'ankle'],
     angle: ['hip', 'knee', 'ankle'],
-    measure: (a) => ({ ...measure(a), rise: floor.update(feetY(a.lm, a.idx), a.t) }),
-    gate: (m) => (m.rise > cfg.jumpRise ? GATES.jump : m.upright ? null : GATES.stand),
+    measure(a) {
+      const m = measure(a);
+      return { ...m, rise: floor.update(feetY(a.lm, a.idx), a.t), front: view.update(m.span) };
+    },
+    gate: (m) => (m.rise > cfg.jumpRise ? GATES.jump : !m.upright ? GATES.stand : m.front ? GATES.front : null),
     rules: [RULES.kneesOverToes, RULES.lean],
     missDelayMs: cfg.missDelayMs,
     turn(ev) {

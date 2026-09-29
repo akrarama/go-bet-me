@@ -44,7 +44,7 @@ function build(j, { near = 'left', vis = 0.95, farVis = 0.6, dir = 1, override =
  * lean: наклон корпуса вперёд; lift: стопы над полом (прыжок); front: стоит лицом к камере.
  * arm: угол локтя (руки для прыжков с махами), по умолчанию руки вперёд.
  */
-function squatPose({ knee = 176, shin = 4, lean = 4, lift = 0, dir = 1, front = false, arm = null, ...opts } = {}) {
+function squatPose({ knee = 176, shin = 4, lean = 4, lift = 0, dir = 1, front = false, facing = false, arm = null, ...opts } = {}) {
   const floor = 0.9 - lift;
   const ankle = { x: 0, y: floor };
   const kneeP = add(ankle, { x: dir * Math.sin(rad(shin)), y: -Math.cos(rad(shin)) }, 0.22);
@@ -61,7 +61,7 @@ function squatPose({ knee = 176, shin = 4, lean = 4, lift = 0, dir = 1, front = 
     elbow = add(shoulder, upper, 0.15);
     wrist = add(elbow, rot({ x: -upper.x, y: -upper.y }, rad(arm)), 0.14);
   }
-  return build(
+  const lm = build(
     {
       nose: add(shoulder, { x: dir * 0.06, y: -0.09 }),
       shoulder, elbow, wrist, hip, knee: kneeP, ankle,
@@ -70,6 +70,21 @@ function squatPose({ knee = 176, shin = 4, lean = 4, lift = 0, dir = 1, front = 
     },
     { dir, ...opts },
   );
+  if (facing) {
+    // лицом к камере: левая и правая половины тела разнесены в ширину плеч и таза
+    const spread = (i, j, w) => {
+      const cx = (lm[i].x + lm[j].x) / 2;
+      lm[i] = { ...lm[i], x: cx + w / 2 / ASPECT };
+      lm[j] = { ...lm[j], x: cx - w / 2 / ASPECT };
+    };
+    spread(11, 12, 0.2);
+    spread(13, 14, 0.26);
+    spread(15, 16, 0.3);
+    spread(23, 24, 0.15);
+    spread(25, 26, 0.16);
+    spread(27, 28, 0.16);
+  }
+  return lm;
 }
 
 /**
@@ -381,6 +396,23 @@ export default (t) => {
     const s = setup(squat);
     s.feed(hold(null, 12));
     a.eq(s.feedback.current?.text, 'Не вижу тебя, встань в кадр целиком');
+  });
+
+
+  t.test('приседания: лицом к камере не считаем, просим повернуться боком', (a) => {
+    const s = setup(squat);
+    const make = (p) => squatPose({ ...p, facing: true });
+    s.feed(hold(make(STAND), 15));
+    for (let i = 0; i < 2; i++) s.feed(rep(make, STAND, DEEP));
+    s.feed(hold(make(STAND), 5));
+    a.eq(s.ctrl.count, 0);
+    a.eq(s.of('rejected').length, 0, 'лицом к камере не пишем ложную «глубину»');
+    a.eq(s.feedback.current?.text, 'Повернись боком к камере, так видно колени и спину');
+    // повернулся боком: считаем
+    s.feed(hold(squatPose(STAND), 20));
+    s.feed(rep(squatPose, STAND, DEEP));
+    s.feed(hold(squatPose(STAND), 5));
+    a.eq(s.ctrl.count, 1);
   });
 
   // ─── Отжимания ───
