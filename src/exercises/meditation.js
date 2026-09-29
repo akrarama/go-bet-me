@@ -209,6 +209,7 @@ export function createController({ challenge, bus, feedback, debug }) {
   sim.eyes = 'auto';
   sim.lost = false;
   sim.second = false;
+  sim.jolt = false;
   sim.joltFrom = -Infinity;
   if (debug?.enabled) debugKeys(debug);
   return c;
@@ -217,7 +218,7 @@ export function createController({ challenge, bus, feedback, debug }) {
 // ─── Отладка: подмена данных лица клавишами (только ?debug=1) ─────
 
 let current = null; // контроллер, который сейчас на экране
-const sim = { eyes: 'auto', lost: false, second: false, joltFrom: -Infinity };
+const sim = { eyes: 'auto', lost: false, second: false, jolt: false, joltFrom: -Infinity };
 const JOLT_MS = 1200;
 let keysReady = false;
 
@@ -229,13 +230,18 @@ function debugKeys(debug) {
   // клавиши глобальные: работают, только пока на экране LIVE идёт медитация
   const key = (k, fn, label) => debug.key(k, () => current && (fn(), show()), label);
   key('e', () => (sim.eyes = EYES[(EYES.indexOf(sim.eyes) + 1) % EYES.length]), 'медитация: глаза авто / закрыты / открыты');
-  key('n', () => (sim.joltFrom = performance.now()), 'медитация: дёрнуть головой');
+  key('n', () => (sim.jolt = true), 'медитация: дёрнуть головой');
   key('l', () => (sim.lost = !sim.lost), 'медитация: лицо пропало вкл/выкл');
   key('y', () => (sim.second = !sim.second), 'медитация: второе лицо вкл/выкл');
 }
 
 /** Данные лица с подменой из клавиш отладки. Без подмены: те же самые данные. */
 export function simulate(res, t) {
+  if (sim.jolt) {
+    // рывок отсчитываем от времени кадра: так же, как его видит контроллер
+    sim.jolt = false;
+    sim.joltFrom = t;
+  }
   const jolt = t - sim.joltFrom < JOLT_MS;
   if (!res || (sim.eyes === 'auto' && !sim.lost && !sim.second && !jolt)) return res;
   if (sim.lost) return { ...res, faces: [], blendshapes: [] };
