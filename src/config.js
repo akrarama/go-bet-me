@@ -73,10 +73,21 @@ export const REPS = {
 
 export const GESTURES = {
   minScore: 0.6,
+  names: ['Thumb_Up', 'Thumb_Down', 'Open_Palm', 'Pointing_Up'], // только эти жесты шлют событие gesture
   holdMs: 400, // жест держится столько, чтобы сработать
+  dropMs: 160, // пропуск распознавания короче этого не сбрасывает удержание
   cooldownMs: 1200, // пауза между срабатываниями
   dwellMs: 1000, // палец на кнопке столько = клик
+  dwellPad: 16, // px: кнопка ловит палец чуть шире своих краёв
+  dwellLeavePad: 32, // px: уйти с кнопки = выйти за такую зону (без дрожания на краю)
+  dwellSettleMs: 450, // после смены экрана кнопки въезжают: dwell ждёт
+  cursorGraceMs: 250, // рука пропала на столько: курсор ещё держим на месте
+  cursorFilter: { minCutoff: 1.0, beta: 0.012, dCutoff: 1.0 }, // One Euro: дрожание в покое против задержки в движении
   handUpMs: 1000, // рука выше головы столько = Старт
+  handDropMs: 250, // короткая потеря руки не сбрасывает прогресс
+  handReleaseY: 0.02, // гистерезис: рука опущена, когда запястье ниже носа на столько (доля высоты кадра)
+  handLowHintMs: 1000, // рука поднята, но ниже головы столько = подсказка
+  minVisibility: 0.5,
   livenessSec: 5,
   livenessTasks: ['left_hand_up', 'right_hand_up', 'Thumb_Up', 'Open_Palm'],
 };
