@@ -62,10 +62,13 @@ body {
 .stage.is-mirrored .stage__video { transform: scaleX(-1); }
 .stage__scrim {
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
-  background:
+  background-image:
     linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0) 24%),
     linear-gradient(to top, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0) 38%);
+  background-color: rgba(10, 10, 12, 0.38); /* в меню видео приглушено, в LIVE ярко */
+  transition: background-color 0.6s var(--ease-out);
 }
+body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0); }
 .stage__overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
 
 /* ─── Шапка ─────────────────────────────────────────────────── */
@@ -107,7 +110,7 @@ body {
 .hero { display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center; }
 .title { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: clamp(48px, 9vw, 112px); line-height: 0.92; letter-spacing: -0.04em; text-shadow: 0 4px 30px rgba(0, 0, 0, 0.4); }
 .h2 { margin: 0 0 10px; font-family: var(--font-display); font-weight: 600; font-size: clamp(22px, 2.6vw, 32px); letter-spacing: -0.02em; }
-.subtitle { margin: 0; max-width: 34ch; color: var(--muted); font-size: clamp(16px, 1.7vw, 21px); line-height: 1.4; }
+.subtitle { margin: 0; max-width: 34ch; color: rgba(245, 245, 247, 0.82); font-size: clamp(16px, 1.7vw, 21px); line-height: 1.4; text-shadow: 0 1px 16px rgba(0, 0, 0, 0.6); }
 .lead { margin: 0 0 10px; font-size: clamp(17px, 1.7vw, 20px); font-weight: 600; line-height: 1.4; }
 .muted { margin: 0; color: var(--muted); line-height: 1.45; }
 
@@ -188,6 +191,15 @@ body {
 .lives { display: flex; gap: 6px; margin-top: 12px; font-size: 28px; color: var(--danger); }
 .life { transition: opacity 0.3s, transform 0.3s var(--ease-spring); }
 .life.is-lost { opacity: 0.2; transform: scale(0.8); filter: grayscale(1); }
+
+.rejects { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+.reject {
+  width: max-content; max-width: min(420px, 80vw); padding: 7px 12px; border-radius: var(--r-pill);
+  background: rgba(255, 77, 79, 0.16); border: 1px solid rgba(255, 77, 79, 0.45); color: #ffd6d6;
+  font-weight: 700; font-size: 14px; animation: toast-in 0.4s var(--ease-spring) both;
+}
+.reject:nth-child(2) { opacity: 0.7; }
+.reject:nth-child(3) { opacity: 0.45; }
 
 .countdown { position: absolute; inset: 0; display: grid; place-items: center; }
 .countdown span {

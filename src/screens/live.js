@@ -28,6 +28,7 @@ export default {
           <div class="counter"><span data-count>0</span><span class="counter__target">/${ch.target}</span></div>
           <div class="progress"><div class="progress__bar" data-progress></div></div>
           <div class="lives" data-lives hidden></div>
+          <ul class="rejects" data-rejects></ul>
         </div>
         <div class="countdown" data-countdown hidden></div>
         <div class="lost" data-lost hidden>
@@ -41,7 +42,17 @@ export default {
     r.els = {
       timer: q('[data-timer]'), count: q('[data-count]'), progress: q('[data-progress]'), lives: q('[data-lives]'),
       countdown: q('[data-countdown]'), lost: q('[data-lost]'), lostCount: q('[data-lost-count]'), finale: q('[data-finale]'),
+      rejects: q('[data-rejects]'),
     };
+
+    // Лог незасчитанных повторов: последние три
+    ctx.on('rejected', ({ text }) => {
+      const li = document.createElement('li');
+      li.className = 'reject';
+      li.textContent = `Не засчитан: ${text}`;
+      r.els.rejects.prepend(li);
+      while (r.els.rejects.children.length > 3) r.els.rejects.lastElementChild.remove();
+    });
 
     ctx.on('camera:lost', ({ since }) => {
       r.lostSince = since ?? performance.now();
@@ -79,6 +90,13 @@ export default {
     render(ctx, r);
     if (r.controller.failed) finish(ctx, r, 'failed');
     else if (r.controller.done) finish(ctx, r, 'target');
+  },
+
+  /** Упражнение может рисовать своё (controller.draw(frame, draw)), иначе стандартный скелет. */
+  draw(frame, ctx) {
+    const c = run?.controller;
+    if (c?.draw) c.draw(frame, ctx.draw);
+    else ctx.draw.auto(frame, { highlight: ctx.feedback.highlight });
   },
 
   exit() {
