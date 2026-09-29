@@ -1,11 +1,45 @@
 // Медитация. Владелец: блок 4 (Медитация).
-// Сейчас заглушка от основы: секунды идут, пока глаза закрыты. Без жизней и нарушений.
-// Правила: раздел 5-6 спеки, config.MEDITATION. Контракт контроллера: см. squat.js.
+// Таймер (count, секунды) идёт, только пока в кадре одно лицо, глаза закрыты и голова неподвижна.
+// Нарушения (раздел 6 спеки), каждое: минус жизнь, подсказка текстом и голосом, событие fault:
+//   лица нет ≥ 2 с; второе лицо ≥ 1 с; глаза открыты ≥ 2 с;
+//   голова двигается: нос сместился больше чем на 4% ширины кадра за 1 с (держится 400 мс или 8 кадров).
+// Первые 5 с после старта нарушения не считаются. Одно и то же нарушение не списывает жизни подряд,
+// пока его не исправили (условия нет 1 с). После нарушения 3 с на исправление: другое нарушение
+// за это время ждёт и списывает жизнь, только если его так и не исправили.
+// 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть и услышать). count ≥ цели: done.
+// Пороги: config.MEDITATION. Контракт контроллера: см. squat.js.
+// Отладка (?debug=1): e глаза авто/закрыты/открыты, n дёрнуть головой, l лицо пропало, y второе лицо.
 
-import { MEDITATION } from '../config.js';
+import { MEDITATION as M } from '../config.js';
+import { ema } from '../vision/geometry.js';
+import { blink, nose, noseTracker, primaryIndex } from '../vision/face.js';
 
-export function createController({ challenge }) {
+/** Правила по приоритету: видимость > второй человек > глаза > голова. label: строка для итогов. */
+export const RULES = [
+  { code: 'face_lost', holdMs: M.faceLostMs, priority: 4, text: 'Лицо вышло из кадра, вернись', label: 'лицо вышло из кадра' },
+  { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек, ты должен быть один', label: 'второй человек в кадре' },
+  { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', label: 'глаза открыты' },
+  { code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', label: 'голова двигалась' },
+];
+
+const INTRO = 'Закрой глаза и замри';
+const round1 = (v) => Math.round(v * 10) / 10;
+
+export function createController({ challenge, bus, feedback, debug }) {
+  const track = noseTracker(M.headWindowMs);
+  const rules = RULES.map((rule) => ({ rule, since: null, lastOn: 0, frames: 0, fired: false, shown: false, count: 0 }));
+  let started = false;
+  let t0 = 0;
   let last = 0;
+  let graceEnd = 0;
+  let nextFaultAt = 0;
+  let introSaid = false;
+  let graceOver = false;
+  let failAt = 0;
+  let prevNose = null;
+  let eyeLevel = null;
+  let closed = null;
+  let streak = 0;
 
   const c = {
     model: 'face',
@@ -13,26 +47,214 @@ export function createController({ challenge }) {
     count: 0,
     done: false,
     failed: false,
-    lives: MEDITATION.lives,
-    maxLives: MEDITATION.lives,
+    lives: M.lives,
+    maxLives: M.lives,
+    best: 0, // самый долгий спокойный отрезок, с
+    paused: 0, // сколько таймер стоял, с
+    /** Что видно сейчас: для отрисовки и отладки. */
+    view: { faces: 0, closed: null, eyeLevel: null, shift: 0, moving: false, calm: false, grace: 0, pending: null, active: null },
 
     start(t) {
-      last = t;
+      started = true;
+      t0 = last = t;
+      graceEnd = t + M.graceSec * 1000;
+      // «Старт» говорит экран LIVE, голосом скажем чуть позже (frame), чтобы его не перебить
+      feedback.hint(INTRO, { level: 'info', code: 'med_intro', speak: false, minMs: M.graceSec * 1000 });
     },
 
     frame(frame, t) {
-      const dt = Math.min(0.5, (t - last) / 1000);
+      if (!started || c.done || c.failed) return;
+      if (failAt) {
+        if (t >= failAt) c.failed = true;
+        return;
+      }
+      const gap = t - last;
       last = t;
-      const bs = frame.face?.blendshapes?.[0];
-      if (!bs) return;
-      const closed = ((bs.eyeBlinkLeft ?? 0) + (bs.eyeBlinkRight ?? 0)) / 2 > MEDITATION.eyesClosedMin;
-      if (closed) c.count += dt;
+      const stale = gap > M.maxFrameGapMs;
+      if (stale) {
+        // кадров долго не было (камера, скрытая вкладка): это время не считаем, окна начинаем заново
+        track.reset();
+        for (const s of rules) {
+          if (!s.fired) s.since = null;
+          s.frames = 0;
+        }
+      }
+      const dt = stale ? 0 : gap / 1000;
+      const aspect = frame.width && frame.height ? frame.width / frame.height : 16 / 9;
+
+      const res = simulate(frame.face, t);
+      const faces = res?.faces ?? [];
+      const n = faces.length;
+      let shift = 0;
+      let moving = false;
+      if (n) {
+        const i = primaryIndex(faces, prevNose, aspect);
+        prevNose = nose(faces[i]);
+        track.push(t, prevNose);
+        shift = track.shift(aspect);
+        moving = shift > M.headMoveMax;
+        const b = blink(res.blendshapes?.[i]);
+        eyeLevel = b == null ? null : ema(eyeLevel, b, M.eyesEma);
+        if (eyeLevel == null) closed = null;
+        else if (eyeLevel > M.eyesClosedMin) closed = true;
+        else if (closed !== true || eyeLevel < M.eyesClosedMin - M.eyesHysteresis) closed = false;
+      } else {
+        prevNose = null;
+        eyeLevel = null;
+        closed = null;
+        track.reset();
+      }
+
+      const grace = t < graceEnd;
+      if (!introSaid && t - t0 >= M.introDelayMs) {
+        introSaid = true;
+        if (grace) feedback.say(INTRO, 'med_intro');
+      }
+      if (!grace && !graceOver) {
+        // grace кончился: движение за это время не в счёт, окно носа начинаем заново
+        graceOver = true;
+        feedback.clear('med_intro');
+        track.reset();
+        if (prevNose) track.push(t, prevNose);
+        shift = 0;
+        moving = false;
+      }
+
+      const calm = n === 1 && closed === true && !moving;
+      if (calm) {
+        c.count += dt;
+        streak += dt;
+        c.best = Math.max(c.best, streak);
+      } else {
+        streak = 0;
+        c.paused += dt;
+      }
       c.done = c.count >= challenge.target;
+
+      const on = { face_lost: n === 0, two_faces: n > 1, eyes_open: n > 0 && closed === false, head_moving: n > 0 && moving };
+      let pending = null;
+      let active = null;
+      for (const s of rules) {
+        const { rule } = s;
+        if (on[rule.code]) {
+          if (s.since == null) s.since = t;
+          s.lastOn = t;
+          if (s.fired) {
+            // нарушение ещё не исправили: подсказка держится, жизнь второй раз не списываем
+            active ??= rule.code;
+            s.shown = true;
+            feedback.hint(rule.text, { level: 'warn', priority: rule.priority, code: rule.code });
+            continue;
+          }
+          if (grace) continue;
+          s.frames += 1;
+          const held = t - Math.max(s.since, graceEnd);
+          const ready = held >= rule.holdMs || (rule.holdFrames && s.frames >= rule.holdFrames);
+          if (ready && t >= nextFaultAt && !c.done) {
+            fire(s, t);
+            active ??= rule.code;
+          } else pending ??= rule.code;
+        } else {
+          s.frames = 0;
+          if (s.since == null) continue;
+          const off = t - s.lastOn;
+          if (s.fired) {
+            if (s.shown) {
+              s.shown = false;
+              feedback.clear(rule.code);
+            }
+            if (off >= M.fixedMs) {
+              s.fired = false;
+              s.since = null;
+            }
+          } else if (off > M.gapMs) s.since = null;
+        }
+      }
+
+      c.view = { faces: n, closed, eyeLevel, shift, moving, calm, grace: grace ? (graceEnd - t) / 1000 : 0, pending, active };
+      debug?.set('медитация', `${calm ? 'идёт' : 'пауза'}, лиц ${n}, глаза ${eyeLevel == null ? '?' : eyeLevel.toFixed(2)}, нос ${(shift * 100).toFixed(1)}%`);
+      debug?.set('нарушение', active ?? pending ?? 'нет');
+    },
+
+    stop() {
+      if (current === c) current = null;
     },
 
     summary() {
-      return { faults: [], rejected: [] };
+      const faults = rules
+        .filter((s) => s.count)
+        .sort((a, b) => b.count - a.count || b.rule.priority - a.rule.priority)
+        .map((s) => ({ code: s.rule.code, text: s.rule.label, count: s.count }));
+      return {
+        faults,
+        rejected: [],
+        extra: { lives: c.lives, maxLives: c.maxLives, bestStreakSec: round1(c.best), pausedSec: round1(c.paused) },
+      };
     },
   };
+
+  function fire(s, t) {
+    const { rule } = s;
+    s.fired = true;
+    s.shown = true;
+    s.count += 1;
+    nextFaultAt = t + M.cooldownMs;
+    c.lives = Math.max(0, c.lives - 1);
+    feedback.hint(rule.text, { level: 'warn', priority: rule.priority, code: rule.code });
+    bus.emit('fault', { code: rule.code, text: rule.text, joints: [], lives: c.lives });
+    if (c.lives === 0) failAt = t + M.failDelayMs;
+  }
+
+  current = c;
+  sim.eyes = 'auto';
+  sim.lost = false;
+  sim.second = false;
+  sim.joltFrom = -Infinity;
+  if (debug?.enabled) debugKeys(debug);
   return c;
+}
+
+// ─── Отладка: подмена данных лица клавишами (только ?debug=1) ─────
+
+let current = null; // контроллер, который сейчас на экране
+const sim = { eyes: 'auto', lost: false, second: false, joltFrom: -Infinity };
+const JOLT_MS = 1200;
+let keysReady = false;
+
+function debugKeys(debug) {
+  if (keysReady) return;
+  keysReady = true;
+  const EYES = ['auto', 'closed', 'open'];
+  const show = () => debug.set('подмена лица', `глаза ${sim.eyes}${sim.lost ? ', лица нет' : ''}${sim.second ? ', второе лицо' : ''}`);
+  // клавиши глобальные: работают, только пока на экране LIVE идёт медитация
+  const key = (k, fn, label) => debug.key(k, () => current && (fn(), show()), label);
+  key('e', () => (sim.eyes = EYES[(EYES.indexOf(sim.eyes) + 1) % EYES.length]), 'медитация: глаза авто / закрыты / открыты');
+  key('n', () => (sim.joltFrom = performance.now()), 'медитация: дёрнуть головой');
+  key('l', () => (sim.lost = !sim.lost), 'медитация: лицо пропало вкл/выкл');
+  key('y', () => (sim.second = !sim.second), 'медитация: второе лицо вкл/выкл');
+}
+
+/** Данные лица с подменой из клавиш отладки. Без подмены: те же самые данные. */
+export function simulate(res, t) {
+  const jolt = t - sim.joltFrom < JOLT_MS;
+  if (!res || (sim.eyes === 'auto' && !sim.lost && !sim.second && !jolt)) return res;
+  if (sim.lost) return { ...res, faces: [], blendshapes: [] };
+  let faces = res.faces ?? [];
+  let blendshapes = res.blendshapes ?? [];
+  if (jolt && faces.length) {
+    const dx = 0.1 * Math.sin((Math.PI * (t - sim.joltFrom)) / JOLT_MS);
+    faces = [faces[0].map((p) => ({ ...p, x: p.x + dx })), ...faces.slice(1)];
+  }
+  if (sim.eyes !== 'auto') {
+    const v = sim.eyes === 'closed' ? 0.9 : 0.05;
+    blendshapes = blendshapes.map((b) => ({ ...b, eyeBlinkLeft: v, eyeBlinkRight: v }));
+  }
+  if (sim.second && faces.length) {
+    const f = faces[0];
+    const cx = f.reduce((s, p) => s + p.x, 0) / f.length;
+    const dx = cx > 0.5 ? -0.32 : 0.32;
+    faces = [...faces, f.map((p) => ({ ...p, x: cx + dx + (p.x - cx) * 0.8, y: p.y + 0.04 }))];
+    blendshapes = [...blendshapes, blendshapes[0] ?? {}];
+  }
+  return { ...res, faces, blendshapes };
 }
