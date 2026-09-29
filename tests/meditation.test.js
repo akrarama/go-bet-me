@@ -375,6 +375,19 @@ export default (t) => {
     a.ok(s.extra.bestStreakSec >= 5.8, 'самый долгий спокойный отрезок');
   });
 
+  t.test('для отрисовки: started, target, данные лица кадра и главное лицо', (a) => {
+    const { c, run } = setup(60);
+    a.eq(c.started, true);
+    a.eq(c.target, 60);
+    run(1000, () => ({ faces: [face(0.75, 0.5, 0.05), face()], blendshapes: [OPEN, CLOSED] }));
+    a.eq(c.faceData.faces.length, 2);
+    a.eq(c.view.primary, 1, 'главное: крупное лицо');
+    a.eq(c.view.faces, 2);
+    run(2000, empty);
+    a.eq(c.view.primary, -1);
+    a.eq(c.view.closed, null);
+  });
+
   t.test('контракт: модель лица, единица секунды, жизни', (a) => {
     const { c } = setup();
     a.eq(c.model, 'face');
