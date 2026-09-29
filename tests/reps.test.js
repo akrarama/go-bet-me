@@ -140,6 +140,16 @@ function seq(make, ...keys) {
   return frames;
 }
 
+/** Дрожание точек как у настоящей модели: детерминированный шум, amp в долях кадра. */
+function jitter(frames, amp = 0.004, seed = 7) {
+  let x = seed;
+  const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648) * 2 - 1;
+  return frames.map((lm) => lm.map((p) => ({ ...p, x: p.x + (rnd() * amp) / ASPECT, y: p.y + rnd() * amp })));
+}
+
+/** Каждый второй кадр: 15 fps вместо 30. */
+const halfRate = (frames) => frames.filter((_, i) => i % 2 === 0);
+
 /** Повтор: стойка → низ → стойка за ms. */
 const rep = (make, top, bottom, ms = 1600) => seq(make, [0, top], [ms / 2, bottom], [ms, top]);
 const hold = (lm, n) => Array.from({ length: n }, () => lm);
@@ -498,6 +508,25 @@ export default (t) => {
     a.eq(s.of('fault')[0].text, 'Слишком быстро, контролируй опускание');
   });
 
+
+
+  t.test('шум: чистые повторы с дрожанием точек считаются точно, без ложных ошибок (30 и 15 fps)', (a) => {
+    for (const rate of [1, 2]) {
+      for (const [mod, make, top, bottom, ms] of [[squat, squatPose, STAND, DEEP, 1800], [pushup, pushupPose, TOP, LOW, 1500]]) {
+        const s = setup(mod);
+        let frames = [...hold(make(top), 12)];
+        for (let i = 0; i < 5; i++) frames.push(...rep(make, top, bottom, ms));
+        frames.push(...hold(make(top), 12));
+        frames = jitter(frames);
+        if (rate === 2) frames = halfRate(frames);
+        s.feed(frames, { dt: (1000 / FPS) * rate });
+        const tag = `${mod === squat ? 'приседания' : 'отжимания'} ${FPS / rate} fps`;
+        a.eq(s.ctrl.count, 5, tag);
+        a.eq(s.of('rejected').length, 0, `${tag}: ${JSON.stringify(s.of('rejected'))}`);
+        a.eq(s.of('fault').length, 0, `${tag}: ${JSON.stringify(s.of('fault').map((f) => f.code))}`);
+      }
+    }
+  });
 
   // ─── Подсказки (feedback.js) ───
   t.test('подсказка: старшая вытесняет сразу, младшая ждёт', (a) => {
