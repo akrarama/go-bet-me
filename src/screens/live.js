@@ -64,8 +64,12 @@ export default {
       r.els.lost.hidden = true;
     });
     ctx.on('debug:finish', ({ success }) => finish(ctx, r, success ? 'forced-success' : 'forced-fail'));
+    // debug: +1 к счёту работает и без кадров (video=none, скрытая вкладка)
     ctx.on('debug:count', () => {
-      if (r.controller) r.controller.count += 1;
+      if (!r.controller) return;
+      r.controller.count += 1;
+      render(ctx, r);
+      if (r.phase === 'live' && Math.floor(r.controller.count) >= r.ch.target) finish(ctx, r, 'target');
     });
     ctx.interval(() => tick(ctx, r), 200);
 
