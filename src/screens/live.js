@@ -6,6 +6,7 @@
 
 import { APP, CHALLENGES } from '../config.js';
 import { esc, formatTime } from '../ui.js';
+import { sound } from '../sound.js';
 
 let run = null; // текущий проход экрана
 
@@ -63,8 +64,12 @@ export default {
       r.els.lost.hidden = true;
     });
     ctx.on('debug:finish', ({ success }) => finish(ctx, r, success ? 'forced-success' : 'forced-fail'));
+    // debug: +1 к счёту работает и без кадров (video=none, скрытая вкладка)
     ctx.on('debug:count', () => {
-      if (r.controller) r.controller.count += 1;
+      if (!r.controller) return;
+      r.controller.count += 1;
+      render(ctx, r);
+      if (r.phase === 'live' && Math.floor(r.controller.count) >= r.ch.target) finish(ctx, r, 'target');
     });
     ctx.interval(() => tick(ctx, r), 200);
 
@@ -112,12 +117,12 @@ function countdown(ctx, r) {
       if (run !== r) return resolve();
       if (n === 0) {
         r.els.countdown.hidden = true;
-        ctx.feedback.say('Старт');
+        sound.play('go');
         return resolve();
       }
       r.els.countdown.hidden = false;
       r.els.countdown.innerHTML = `<span>${n}</span>`;
-      ctx.feedback.say(String(n));
+      sound.play('tick');
       n -= 1;
       ctx.timeout(step, 1000);
     };
@@ -138,6 +143,7 @@ function render(ctx, r) {
       el.classList.remove('is-bump');
       void el.offsetWidth;
       el.classList.add('is-bump');
+      if (c.unit !== 'секунды') sound.play('rep');
       ctx.bus.emit('count', { count, target: r.ch.target, unit: c.unit, type: r.ch.type });
     }
   }
@@ -196,7 +202,7 @@ function finish(ctx, r, reason) {
   ctx.app.session = session;
   ctx.bus.emit('live:end', { session, challenge: r.ch });
   ctx.feedback.clearNow();
-  ctx.feedback.say(success ? 'Есть! Цель выполнена' : 'Не получилось');
+  sound.play(success ? 'win' : 'lose');
   r.els.countdown.hidden = true;
   r.els.finale.hidden = false;
   r.els.finale.dataset.success = success;
