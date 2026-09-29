@@ -15,6 +15,10 @@ export const DEBUG = param('debug') === '1';
  * Картинки через запятую (.jpg/.png): слайд-шоу, кадр меняется каждые 2.5 с.
  */
 export const DEBUG_VIDEO = DEBUG ? param('video') : null;
+/** ?video=none: вообще без камеры, только интерфейс (скрытые вкладки, проверка экранов клавишами). */
+export const DEBUG_NO_CAMERA = DEBUG_VIDEO === 'none';
+/** ?fast=1: без отсчёта 3-2-1 и пауз перед итогами (только с ?debug=1). */
+export const DEBUG_FAST = DEBUG && param('fast') === '1';
 /** ?state=LIVE: сразу открыть экран (только с ?debug=1). */
 export const DEBUG_STATE = DEBUG ? param('state') : null;
 /** ?type=pushup: тип челленджа по умолчанию (только с ?debug=1). */
@@ -25,8 +29,8 @@ export const DEBUG_TYPE = DEBUG ? param('type') : null;
 export const APP = {
   cameraLostAfterMs: 1000, // нет новых кадров столько: camera:lost
   voidAfterMs: 5000, // камера пропала дольше: VOID, всем возврат
-  countdownSec: 3, // 3, 2, 1 перед стартом LIVE
-  resultDelayMs: 1600, // пауза между финишем и экраном итогов
+  countdownSec: DEBUG_FAST ? 0 : 3, // 3, 2, 1 перед стартом LIVE
+  resultDelayMs: DEBUG_FAST ? 0 : 1600, // пауза между финишем и экраном итогов
 };
 
 const MP = '0.10.35';

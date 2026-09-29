@@ -3,7 +3,7 @@
 //          camera:back {}       кадры снова идут
 //          camera:ended {}      трек камеры закрыт насовсем
 
-import { APP, DEBUG_VIDEO } from './config.js';
+import { APP, DEBUG_VIDEO, DEBUG_NO_CAMERA } from './config.js';
 import { bus } from './bus.js';
 
 export const camera = {
@@ -18,6 +18,11 @@ export const camera = {
     video.muted = true;
     video.playsInline = true;
 
+    if (DEBUG_NO_CAMERA) {
+      this.source = 'none';
+      this.mirror = false;
+      return this;
+    }
     if (DEBUG_VIDEO && IMAGE_RE.test(DEBUG_VIDEO)) {
       video.srcObject = await slideshow(DEBUG_VIDEO.split(','));
       this.source = 'file';
@@ -47,6 +52,12 @@ export const camera = {
   /** debug: включить/выключить имитацию обрыва камеры. */
   freeze(on = !this.frozen) {
     this.frozen = on;
+    if (this.source === 'none') {
+      // без камеры watchdog не работает: сообщаем об обрыве сразу
+      this.lost = on;
+      bus.emit(on ? 'camera:lost' : 'camera:back', { since: performance.now() });
+      return;
+    }
     this.video.style.visibility = on ? 'hidden' : '';
     if (this.source === 'file') on ? this.video.pause() : this.video.play();
   },
