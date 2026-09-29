@@ -1,7 +1,7 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { APP, DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
+import { DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
@@ -118,8 +118,6 @@ async function boot() {
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);
   draw.init($('#overlay'));
   feedback.mount($('#hint'));
-  // Страховка, пока голос не выключен в feedback.js (блок 1): озвучку заменили звуками
-  if (!APP.voice) feedback.say = () => {};
   debug.mount($('#debug'));
   guardInput();
 
