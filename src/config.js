@@ -27,7 +27,8 @@ export const DEBUG_TYPE = DEBUG ? param('type') : null;
 // ─── Координатор ────────────────────────────────────────────────
 
 export const APP = {
-  cameraLostAfterMs: 1000, // нет новых кадров столько: camera:lost
+  voice: false, // озвучка подсказок выключена: тестерам мешал роботизированный голос, вместо неё звуки (sound.js)
+  cameraLostAfterMs: 2000, // нет новых кадров столько (вкладка видна): camera:lost
   voidAfterMs: 5000, // камера пропала дольше: VOID, всем возврат
   countdownSec: DEBUG_FAST ? 0 : 3, // 3, 2, 1 перед стартом LIVE
   resultDelayMs: DEBUG_FAST ? 0 : 1600, // пауза между финишем и экраном итогов
