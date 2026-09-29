@@ -314,6 +314,15 @@ function walletTests(t) {
     a.eq(w.balance, 99);
   });
 
+  t.test('кошелёк: отмена до старта ничего не возвращает, потому что ничего не списано', (a) => {
+    const w = createWallet({ storage: memory() });
+    const seen = [];
+    w.subscribe((c) => seen.push(c.reason));
+    a.eq(w.refund('camera', challenge().id), null);
+    a.eq(w.balance, 100);
+    a.eq(seen.length, 0, 'фишка баланса не дёргается');
+  });
+
   t.test('кошелёк: ставки против после старта не меняют расчёт (снимок на live:start)', (a) => {
     const w = createWallet({ storage: memory() });
     const ch = challenge({ bets: [bet('dima', 5, { bot: true })] });
