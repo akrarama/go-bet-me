@@ -49,13 +49,17 @@ export function createController({ challenge, bus, feedback, debug }) {
     failed: false,
     lives: M.lives,
     maxLives: M.lives,
+    target: challenge.target,
+    started: false,
     best: 0, // самый долгий спокойный отрезок, с
     paused: 0, // сколько таймер стоял, с
-    /** Что видно сейчас: для отрисовки и отладки. */
-    view: { faces: 0, closed: null, eyeLevel: null, shift: 0, moving: false, calm: false, grace: 0, pending: null, active: null },
+    /** Данные лица последнего кадра (с подменой из клавиш отладки). */
+    faceData: null,
+    /** Что видно сейчас: для отрисовки и отладки. primary: индекс главного лица в faceData.faces. */
+    view: { faces: 0, primary: -1, closed: null, eyeLevel: null, shift: 0, moving: false, calm: false, grace: 0, pending: null, active: null },
 
     start(t) {
-      started = true;
+      started = c.started = true;
       t0 = last = t;
       graceEnd = t + M.graceSec * 1000;
       // «Старт» говорит экран LIVE, голосом скажем чуть позже (frame), чтобы его не перебить
@@ -82,13 +86,14 @@ export function createController({ challenge, bus, feedback, debug }) {
       const dt = stale ? 0 : gap / 1000;
       const aspect = frame.width && frame.height ? frame.width / frame.height : 16 / 9;
 
-      const res = simulate(frame.face, t);
+      const res = (c.faceData = simulate(frame.face, t));
       const faces = res?.faces ?? [];
       const n = faces.length;
       let shift = 0;
       let moving = false;
+      let i = -1;
       if (n) {
-        const i = primaryIndex(faces, prevNose, aspect);
+        i = primaryIndex(faces, prevNose, aspect);
         prevNose = nose(faces[i]);
         track.push(t, prevNose);
         shift = track.shift(aspect);
@@ -171,7 +176,7 @@ export function createController({ challenge, bus, feedback, debug }) {
         }
       }
 
-      c.view = { faces: n, closed, eyeLevel, shift, moving, calm, grace: grace ? (graceEnd - t) / 1000 : 0, pending, active };
+      c.view = { faces: n, primary: i, closed, eyeLevel, shift, moving, calm, grace: grace ? (graceEnd - t) / 1000 : 0, pending, active };
       debug?.set('медитация', `${calm ? 'идёт' : 'пауза'}, лиц ${n}, глаза ${eyeLevel == null ? '?' : eyeLevel.toFixed(2)}, нос ${(shift * 100).toFixed(1)}%`);
       debug?.set('нарушение', active ?? pending ?? 'нет');
     },
@@ -218,6 +223,9 @@ export function createController({ challenge, bus, feedback, debug }) {
 // ─── Отладка: подмена данных лица клавишами (только ?debug=1) ─────
 
 let current = null; // контроллер, который сейчас на экране
+
+/** Контроллер медитации, который сейчас на экране (для отладки в консоли), или null. */
+export const active = () => current;
 const sim = { eyes: 'auto', lost: false, second: false, jolt: false, joltFrom: -Infinity };
 const JOLT_MS = 1200;
 let keysReady = false;
