@@ -1,5 +1,6 @@
 // Камера или (с ?debug=1&video=...) видеофайл. Следит за обрывом.
-// События: camera:lost {since}  нет новых кадров дольше APP.cameraLostAfterMs
+// События: camera:lost {since}  камера замолчала или закрылась, либо нет новых кадров
+//                               дольше APP.cameraLostAfterMs, пока вкладка видна
 //          camera:back {}       кадры снова идут
 //          camera:ended {}      трек камеры закрыт насовсем
 
@@ -101,22 +102,56 @@ function waitForSize(video) {
   });
 }
 
+/**
+ * Обрыв определяем по трём сигналам:
+ * 1) трек камеры закрылся (ended) или замолчал (mute): сразу;
+ * 2) новые кадры (requestVideoFrameCallback, иначе currentTime) не приходят дольше порога;
+ * 3) скрытую вкладку обрывом не считаем: там браузер сам не рисует кадры.
+ */
 function watchdog(cam) {
-  let lastTime = -1;
-  let lastChange = performance.now();
-  setInterval(() => {
-    const now = performance.now();
-    const t = cam.frozen ? lastTime : cam.video.currentTime;
-    if (t !== lastTime) {
-      lastTime = t;
-      lastChange = now;
-      if (cam.lost) {
-        cam.lost = false;
-        bus.emit('camera:back', {});
+  const video = cam.video;
+  const track = video.srcObject?.getVideoTracks?.()[0] ?? null;
+  let lastFrameAt = performance.now();
+  const mark = () => {
+    if (!cam.frozen) lastFrameAt = performance.now();
+  };
+
+  if ('requestVideoFrameCallback' in video) {
+    const onFrame = () => {
+      mark();
+      video.requestVideoFrameCallback(onFrame);
+    };
+    video.requestVideoFrameCallback(onFrame);
+  } else {
+    let lastTime = -1;
+    setInterval(() => {
+      if (video.currentTime !== lastTime) {
+        lastTime = video.currentTime;
+        mark();
       }
-    } else if (!cam.lost && now - lastChange > APP.cameraLostAfterMs) {
-      cam.lost = true;
-      bus.emit('camera:lost', { since: lastChange });
+    }, 100);
+  }
+
+  const set = (lost, since = performance.now()) => {
+    if (lost === cam.lost) return;
+    cam.lost = lost;
+    bus.emit(lost ? 'camera:lost' : 'camera:back', lost ? { since } : {});
+  };
+  track?.addEventListener('mute', () => set(true));
+  track?.addEventListener('ended', () => set(true));
+  track?.addEventListener('unmute', () => {
+    mark();
+    set(false);
+  });
+
+  setInterval(() => {
+    if (cam.frozen) return set(true, lastFrameAt);
+    if (track && (track.readyState === 'ended' || track.muted)) return;
+    if (document.visibilityState !== 'visible') {
+      lastFrameAt = performance.now();
+      return;
     }
-  }, 200);
+    if (performance.now() - lastFrameAt > APP.cameraLostAfterMs) set(true, lastFrameAt);
+    else set(false);
+  }, 250);
 }

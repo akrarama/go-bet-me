@@ -41,6 +41,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* иначе display: flex/grid у классов перебивает hidden */
 
 html,
 body {

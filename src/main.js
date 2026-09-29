@@ -1,7 +1,7 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
+import { APP, DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
@@ -10,6 +10,7 @@ import * as models from './vision/models.js';
 import { gestures } from './vision/gestures.js';
 import { draw } from './draw.js';
 import { feedback } from './feedback.js';
+import { sound } from './sound.js';
 import { debug } from './debug.js';
 import { ui, $ } from './ui.js';
 import { dwell } from './ui/dwell.js';
@@ -66,6 +67,7 @@ function cameraError(err) {
 /** Звук включается после первого касания. Настоящие клики мышью работают только в ?debug=1. */
 function guardInput() {
   const unlock = () => {
+    sound.unlock();
     feedback.unlockAudio();
     document.body.classList.add('is-audio-on');
   };
@@ -116,6 +118,8 @@ async function boot() {
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);
   draw.init($('#overlay'));
   feedback.mount($('#hint'));
+  // Страховка, пока голос не выключен в feedback.js (блок 1): озвучку заменили звуками
+  if (!APP.voice) feedback.say = () => {};
   debug.mount($('#debug'));
   guardInput();
 
