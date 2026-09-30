@@ -208,6 +208,226 @@ function moneyTests(t) {
   });
 }
 
+// ─── Кошелёк (src/wallet.js) ─────────────────────────────────────
+
+import { createWallet } from '../src/wallet.js';
+
+/** Память вместо localStorage. fail: запись бросает ошибку, как в приватном режиме. */
+function memory({ fail = false } = {}) {
+  const m = new Map();
+  return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => {
+      if (fail) throw new Error('QuotaExceededError');
+      m.set(k, String(v));
+    },
+    removeItem: (k) => m.delete(k),
+  };
+}
+let seq = 0;
+const challenge = (over = {}) => ({ id: `c${++seq}`, type: 'squat', target: 10, stake: 10, bets: two5(), ...over });
+const finished = (ch, success) => ({ challengeId: ch.id, count: success ? ch.target : 3, success, reason: success ? 'target' : 'time', durationSec: 40 });
+/** Раунд целиком: live:start → live:end → экран итогов. */
+function play(w, ch, success) {
+  w.hold(ch);
+  w.end(finished(ch, success));
+  return w.settle(ch.id);
+}
+
+function walletTests(t) {
+  t.test('кошелёк: новый профиль, 100 кредитов', (a) => {
+    const w = createWallet({ storage: memory() });
+    a.eq(w.balance, 100);
+    a.ok(w.canAfford(100));
+    a.ok(!w.canAfford(100.01));
+    a.eq(w.open, null);
+  });
+
+  t.test('кошелёк: ставка списывается на старте, выплата на итогах и только один раз', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge();
+    w.hold(ch);
+    a.eq(w.balance, 90, 'после live:start');
+    w.end(finished(ch, true));
+    a.eq(w.balance, 90, 'до экрана итогов выплаты нет');
+    const res = w.settle(ch.id);
+    a.eq(w.balance, 109, 'S назад + M × 0.9');
+    a.eq(res.settlement.player.delta, 9);
+    a.eq(res.round.balanceBefore, 100);
+    a.eq(res.round.balanceAfter, 109);
+    const again = w.settle(ch.id);
+    a.eq(w.balance, 109, 'второй вход на экран итогов не платит');
+    a.eq(again.round.id, res.round.id);
+  });
+
+  t.test('кошелёк: не сделал → ставка потеряна', (a) => {
+    const w = createWallet({ storage: memory() });
+    const res = play(w, challenge(), false);
+    a.eq(w.balance, 90);
+    a.eq(res.settlement.player.delta, -10);
+    a.eq(res.round.status, 'settled');
+  });
+
+  t.test('кошелёк: соло, сделал → ставка вернулась, не сделал → ушла создателям', (a) => {
+    const w = createWallet({ storage: memory() });
+    play(w, challenge({ bets: [] }), true);
+    a.eq(w.balance, 100);
+    play(w, challenge({ bets: [] }), false);
+    a.eq(w.balance, 90);
+  });
+
+  t.test('кошелёк: отмена возвращает ставку, итогов после неё нет', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge();
+    w.hold(ch);
+    const r = w.refund('camera', ch.id);
+    a.eq(w.balance, 100);
+    a.eq(r.status, 'refunded');
+    a.eq(r.reason, 'camera');
+    a.ok(r.settlement.voided);
+    a.deep(r.settlement.friends.map((f) => f.payout), [5, 5], 'друзьям вернули их ставки');
+    a.eq(w.refund('camera', ch.id), null, 'второй возврат не делается');
+    a.eq(w.end(finished(ch, true)), null);
+    a.ok(w.settle(ch.id).settlement.voided, 'экран итогов увидит отмену');
+    a.eq(w.balance, 100, 'после отмены выплат нет');
+  });
+
+  t.test('кошелёк: после финиша отмена уже не срабатывает', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge();
+    w.hold(ch);
+    w.end(finished(ch, true));
+    a.eq(w.refund('camera', ch.id), null);
+    w.settle(ch.id);
+    a.eq(w.balance, 109);
+  });
+
+  t.test('кошелёк: ставки против после старта не меняют расчёт (снимок на live:start)', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ bets: [bet('dima', 5, { bot: true })] });
+    w.hold(ch);
+    ch.bets.push(bet('late', 5));
+    w.end(finished(ch, true));
+    a.eq(w.settle(ch.id).settlement.pool, 5);
+    a.eq(w.balance, 104.5);
+  });
+
+  t.test('кошелёк: перезагрузка посреди челленджа → ставку вернули', (a) => {
+    const storage = memory();
+    createWallet({ storage }).hold(challenge());
+    const w = createWallet({ storage });
+    a.eq(w.balance, 90, 'списание сохранилось');
+    const closed = w.recover();
+    a.eq(closed.length, 1);
+    a.eq(closed[0].status, 'refunded');
+    a.eq(w.balance, 100);
+    a.eq(createWallet({ storage }).balance, 100, 'возврат тоже сохранён');
+  });
+
+  t.test('кошелёк: перезагрузка между финишем и итогами → расчёт применяется', (a) => {
+    const storage = memory();
+    const ch = challenge();
+    const w1 = createWallet({ storage });
+    w1.hold(ch);
+    w1.end(finished(ch, true));
+    const w2 = createWallet({ storage });
+    w2.recover();
+    a.eq(w2.balance, 109);
+    a.eq(w2.settle(ch.id).settlement.player.delta, 9, 'экран итогов покажет тот же расчёт');
+    a.eq(w2.balance, 109);
+  });
+
+  t.test('кошелёк: новый старт закрывает брошенный раунд, списана одна ставка', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge();
+    w.hold(ch);
+    w.hold(ch); // тот же челлендж ещё раз (клавиша 5 в отладке)
+    a.eq(w.balance, 90);
+    a.eq(w.history.filter((h) => h.kind === 'round').map((h) => h.status).join(), 'refunded,held');
+  });
+
+  t.test('кошелёк: десять раундов подряд сходятся с историей', (a) => {
+    const storage = memory();
+    let w = createWallet({ storage });
+    const plan = [
+      [10, two5(), true], [10, two5(), false], [20, two5(), true], [20, two5(), false], [5, [bet('dima', 5)], true],
+      [5, [], false], [5, [], true], [10, two5(), 'void'], [20, [bet('dima', 5)], false], [10, two5(), true],
+    ];
+    for (const [stake, bets, outcome] of plan) {
+      const ch = challenge({ stake, bets });
+      w.hold(ch);
+      if (outcome === 'void') {
+        w.refund('camera', ch.id);
+        continue;
+      }
+      w.end(finished(ch, outcome));
+      w = createWallet({ storage }); // перезагрузка между финишем и итогами не мешает
+      w.settle(ch.id);
+    }
+    // 100 +9 −10 +9 −20 +4,5 −5 +0 (отмена) −20 +9
+    a.eq(w.balance, 76.5);
+    const rounds = w.history.filter((h) => h.kind === 'round');
+    a.eq(rounds.length, 10);
+    a.ok(rounds.every((r) => r.status === 'settled' || r.status === 'refunded'), 'все раунды закрыты');
+    const sum = rounds.reduce((s, r) => s + toCents(r.settlement.player.delta), 0);
+    a.eq(toCents(w.balance), 10000 + sum, 'баланс = 100 + сумма итогов');
+  });
+
+  t.test('кошелёк: пополнение до 100, только когда меньше', (a) => {
+    const w = createWallet({ storage: memory() });
+    for (const stake of [20, 20, 20, 20, 17]) play(w, challenge({ stake, bets: [] }), false);
+    a.eq(w.balance, 3);
+    a.ok(!w.canAfford(5));
+    a.eq(w.topUp(), 97);
+    a.eq(w.balance, 100);
+    a.eq(w.topUp(), 0, 'полный кошелёк не пополняется');
+    a.eq(w.history.filter((h) => h.kind === 'topup').length, 1);
+  });
+
+  t.test('кошелёк: подписчик узнаёт о каждом изменении баланса', (a) => {
+    const w = createWallet({ storage: memory() });
+    const seen = [];
+    w.subscribe((c) => seen.push(`${c.reason}:${c.delta}:${c.balance}`));
+    play(w, challenge(), true);
+    w.settle(`c${seq}`);
+    w.topUp();
+    a.deep(seen, ['hold:-10:90', 'settle:19:109']);
+  });
+
+  t.test('кошелёк: битые данные → новый профиль, ошибка записи → живём в памяти', (a) => {
+    const broken = memory();
+    broken.setItem('protiv:v1', '{нет');
+    a.eq(createWallet({ storage: broken }).balance, 100);
+    const odd = memory();
+    odd.setItem('protiv:v1', JSON.stringify({ v: 1, cents: 'много', history: [] }));
+    a.eq(createWallet({ storage: odd }).balance, 100);
+    const w = createWallet({ storage: memory({ fail: true }) });
+    play(w, challenge(), true);
+    a.eq(w.balance, 109);
+    a.eq(createWallet({ storage: null }).balance, 100, 'без хранилища тоже работает');
+  });
+
+  t.test('кошелёк: история не растёт бесконечно, незакрытый раунд не теряется', (a) => {
+    const w = createWallet({ storage: memory(), keep: 5 });
+    for (let i = 0; i < 12; i++) play(w, challenge({ bets: [] }), true);
+    const ch = challenge();
+    w.hold(ch);
+    a.eq(w.history.length, 5);
+    a.eq(w.open?.challengeId, ch.id);
+  });
+}
+
+// ─── Боты и лента (src/friends/bots.js) ──────────────────────────
+
+function botsTests(t) {}
+
+// ─── Экраны итогов (src/screens/result.js, src/screens/void.js) ──
+
+function screensTests(t) {}
+
 export default (t) => {
   moneyTests(t);
+  walletTests(t);
+  botsTests(t);
+  screensTests(t);
 };

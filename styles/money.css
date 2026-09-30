@@ -1,2 +1,42 @@
 /* Стили блока 3 (Деньги): баланс, лента комментов, RESULT, VOID.
    Токены (цвета, шрифты, радиусы) берём из base.css, свои не заводим. */
+
+/* ─── Фишка баланса в шапке (wallet.js) ─────────────────────── */
+
+.balance {
+  position: relative; gap: 7px;
+  transition: border-color 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out);
+}
+.balance__label { color: var(--muted); font-weight: 600; }
+.balance__value { font-weight: 800; font-size: 15px; transition: color 0.4s var(--ease-out); }
+.balance__unit { color: var(--muted); font-weight: 600; margin-left: -3px; }
+.balance.is-up { border-color: color-mix(in srgb, var(--accent) 65%, transparent); box-shadow: 0 0 0 4px var(--accent-glow); }
+.balance.is-down { border-color: color-mix(in srgb, var(--danger) 65%, transparent); box-shadow: 0 0 0 4px var(--danger-glow); }
+.balance.is-up .balance__value { color: var(--accent); }
+.balance.is-down .balance__value { color: var(--danger); }
+
+/* всплывающее изменение под фишкой: +19 / −10 */
+.balance__delta {
+  position: absolute; top: calc(100% + 8px); right: 10px;
+  padding: 5px 11px; border-radius: var(--r-pill);
+  background: var(--surface-strong); border: 1px solid var(--line);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  font-weight: 800; font-size: 15px; box-shadow: var(--shadow);
+  pointer-events: none; animation: balance-delta 1.8s var(--ease-out) both;
+}
+.balance__delta.is-up { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.balance__delta.is-down { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+@keyframes balance-delta {
+  0% { opacity: 0; transform: translateY(-10px) scale(0.85); }
+  16% { opacity: 1; transform: translateY(0) scale(1); }
+  72% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(6px) scale(0.96); }
+}
+
+@media (max-width: 640px) {
+  .balance__label { display: none; }
+}
+
+/* ─── Лента комментов друзей в LIVE (friends/bots.js) ───────── */
+
+/* ─── RESULT и VOID (screens/result.js, screens/void.js) ────── */
