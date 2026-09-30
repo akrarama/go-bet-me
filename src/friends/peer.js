@@ -334,7 +334,7 @@ export function createGuest({ hostId, bus, name, avatar, Peer: PeerClass = null,
         /* уже закрыт */
       }
     }
-    io.closed();
+    io.closed({ left: true });
   };
 
   return api;

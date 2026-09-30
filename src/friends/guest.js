@@ -17,7 +17,7 @@ import { betId, cleanText, cleanName, cleanAvatar, parseHostMsg } from './protoc
  * bus: шина. wallet: createGuestWallet(). name, avatar: если экран не передал, случайные из MONEY.friend.guests.
  * Возвращает { api, io }: api отдаётся экрану, io для peer.js (связь с сетью).
  */
-export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, now = () => Date.now() }) {
+export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, now = () => Date.now(), timers = globalThis }) {
   const cfg = MONEY.friend;
   const pick = cfg.guests[Math.floor(rng() * cfg.guests.length)] ?? {};
   const me = { name: cleanName(name || pick.name), avatar: cleanAvatar(avatar || pick.avatar) };
@@ -29,6 +29,7 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
   let myBet = 0; // ставка друга в этом челлендже (принята хостом)
   let challengeId = null;
   let lastReactAt = -Infinity;
+  let lostTimer = null; // связь с игроком пропала посреди раунда: ждём MONEY.friend.hostLostMs, потом возвращаем ставку
 
   wallet.recover('interrupted'); // прошлый раз закрыли вкладку посреди челленджа: ставка возвращается
   wallet.subscribe(({ reason, delta, balance }) => bus.emit('guest:wallet', { balance, delta, reason }));
@@ -130,6 +131,18 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
     },
   };
 
+  const clearLost = () => {
+    if (lostTimer != null) timers.clearTimeout?.(lostTimer);
+    lostTimer = null;
+  };
+
+  /** Игрок не вернулся: ставка возвращается, экран получает обычный void (причина left). */
+  function hostGone() {
+    lostTimer = null;
+    if (!wallet.refund(challengeId, 'left')) return;
+    bus.emit('guest:msg', { msg: { t: 'void', reason: 'left' } });
+  }
+
   const io = {
     setPeerId(id) {
       peerId = id;
@@ -137,16 +150,21 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
     setStatus,
     /** Соединение с игроком открылось: пополнить, если пусто, и представиться. */
     open(l) {
+      clearLost(); // игрок вернулся
       link = l;
       wallet.topUpIfBroke();
       l.send({ t: 'hello', name: me.name, avatar: me.avatar });
       setStatus('open');
     },
     message: onMessage,
-    closed() {
+    /** Связь закрылась. left: друг сам ушёл (stop), тогда ничего не ждём. */
+    closed({ left = false } = {}) {
       link = null;
       lobby = null;
       if (status !== 'error') setStatus('closed');
+      if (left) return clearLost();
+      // короткий обрыв сети раунд не отменяет: возвращаем ставку, только если игрока нет уже MONEY.friend.hostLostMs
+      if (wallet.open.length && lostTimer == null) lostTimer = timers.setTimeout(hostGone, cfg.hostLostMs);
     },
     stream: (stream) => bus.emit('guest:stream', { stream }),
   };

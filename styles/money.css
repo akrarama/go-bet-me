@@ -105,6 +105,10 @@
   font-size: 15px; font-weight: 700; animation: result-rise 0.45s var(--ease-out) both; animation-delay: calc(0.3s + var(--i, 0) * 0.05s);
 }
 .result__fault-count { color: var(--danger); font-variant-numeric: tabular-nums; }
+.result__streak {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 16px; font-weight: 800; color: var(--accent);
+  animation: result-rise 0.45s var(--ease-out) both; animation-delay: 0.25s;
+}
 .result__clean { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-weight: 700; color: var(--ok); }
 .result__clean-icon {
   width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
@@ -155,8 +159,22 @@
 
 /* кнопка оживает не сразу: жест, который ещё держат после LIVE, не пролистает итоги */
 .wait-cta { width: 100%; transition: opacity 0.45s var(--ease-out), transform 0.25s var(--ease-spring), background 0.2s, box-shadow 0.2s; }
-.wait-cta.is-waiting { opacity: 0.35; }
-.wait-cta > span { font-size: 1.2em; }
+.wait-cta.is-waiting { opacity: 0.55; }
+/* иконка 👍 с тонким кольцом ожидания: оно заполняется за MONEY.ctaGuardMs (--guard), потом гаснет, кнопка оживает */
+.wait-cta__icon { position: relative; display: inline-grid; place-items: center; font-size: 1.2em; margin: 0 0.2em; }
+.wait-cta__ring {
+  position: absolute; inset: -0.4em; width: calc(100% + 0.8em); height: calc(100% + 0.8em);
+  transform: rotate(-90deg); overflow: visible; pointer-events: none;
+  transition: opacity 0.3s var(--ease-out);
+}
+.wait-cta__ring circle { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.wait-cta__track { opacity: 0.25; }
+.wait-cta__fill { stroke-dasharray: 1; stroke-dashoffset: 1; animation: wait-ring var(--guard, 2500ms) linear forwards; }
+.wait-cta:not(.is-waiting) .wait-cta__ring { opacity: 0; }
+@keyframes wait-ring { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .wait-cta__fill { animation: none; stroke-dashoffset: 0.5; } /* без движения: половина кольца, чтобы было видно «ждём» */
+}
 
 .result-empty { display: grid; gap: 14px; }
 
