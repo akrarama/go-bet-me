@@ -282,7 +282,8 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
 
 function storageKey() {
   const dir = globalThis.location?.pathname?.replace(/[^/]*$/, '') ?? '';
-  return dir ? `${MONEY.storageKey}@${dir}` : MONEY.storageKey;
+  const base = dir ? `${MONEY.storageKey}@${dir}` : MONEY.storageKey;
+  return globalThis.__accountStorageSuffix ? `${base}:${globalThis.__accountStorageSuffix}` : base;
 }
 
 function browserStorage() {
@@ -400,6 +401,8 @@ export const wallet = {
       if (quiet) chip.jump(balance);
       else chip.to(balance, delta, badgeOf(change));
       ctx.debug.set('баланс', balance);
+      // Supabase сохраняет баланс для входа с другого устройства. Кредиты демо-режима, не деньги.
+      try { globalThis.__creditsSync?.(balance); } catch (err) { console.warn('[credits sync]', err); }
       if (reason === 'topup') ctx.ui.toast(`Пополнили до ${formatCredits(balance)} кр.`, { icon: '🪙', tone: 'ok' });
       if (reason === 'hold' && round?.requested != null)
         ctx.ui.toast(round.stake ? `Не хватало кредитов, ставка уменьшена до ${formatCredits(round.stake)} кр.` : 'Кредитов нет, играем без ставки', { icon: '🪙' });

@@ -5,6 +5,7 @@ import { GESTURES } from '../src/config.js';
 import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT, createCursorGate, gestures } from '../src/vision/gestures.js';
 import { targetLabel, goalChip, goalNote, plural, mss } from '../src/screens/setup.js';
 import { CHALLENGES } from '../src/config.js';
+import { secText } from '../src/screens/idle.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 import { createFeedback } from '../src/feedback.js';
 import { VERDICT_HINT } from '../src/screens/liveness.js';
@@ -510,10 +511,11 @@ export default (t) => {
     a.deep(j.onGesture('Thumb_Up', 200), quiet);
     a.eq(j.done, 'pass');
     const k = createLivenessJudge('right_hand_up', { t0: 0 });
-    k.tick(5000);
-    a.deep(k.onHandUp('right', 5100), quiet, 'после fail pass нет:');
-    a.deep(k.onHandUp('left', 5100), quiet);
-    a.deep(k.tick(6000), quiet);
+    const end = G.livenessSec * 1000; // дедлайн из config, а не зашитые 5 с
+    k.tick(end);
+    a.deep(k.onHandUp('right', end + 100), quiet, 'после fail pass нет:');
+    a.deep(k.onHandUp('left', end + 100), quiet);
+    a.deep(k.tick(end + 1000), quiet);
     a.eq(k.done, 'fail');
   });
 
@@ -1188,5 +1190,35 @@ export default (t) => {
       }
       a.eq(typeof goalNote(type), 'string');
     }
+  });
+
+  // ─── Тексты: одна запись и один голос ──────────────────────────────
+
+  t.test('тексты: секунды в подсказках одной записью («1 секунду», дробные через запятую)', (a) => {
+    a.eq(secText(1000), '1 секунду');
+    a.eq(secText(1500), '1,5 с');
+    a.eq(secText(2000), '2 с');
+    a.eq(secText(GESTURES.dwellMs), '1 секунду', 'так читается инструкция про кнопки в IDLE и SETUP');
+  });
+
+  t.test('тексты: провал проверки пишет камера, а не «мы», без мужского рода про игрока', (a) => {
+    for (const [task, text] of Object.entries(LIVENESS_TEXT)) {
+      a.ok(text.fail.startsWith('камера не увидела '), `${task}: «${text.fail}»`);
+      a.ok(!/[—–]/.test(text.title + text.fail), `${task}: без длинного тире`);
+    }
+  });
+
+  t.test('склонение: дробные числа идут в родительный падеж («4,5 кредита»), целые как раньше', (a) => {
+    const K = ['кредит', 'кредита', 'кредитов'];
+    a.eq(plural(4.5, ...K), 'кредита');
+    a.eq(plural(1.5, ...K), 'кредита');
+    a.eq(plural(0.5, ...K), 'кредита');
+    a.eq(plural(11.5, ...K), 'кредита');
+    a.eq(plural(1, ...K), 'кредит');
+    a.eq(plural(2, ...K), 'кредита');
+    a.eq(plural(5, ...K), 'кредитов');
+    a.eq(plural(11, ...K), 'кредитов');
+    a.eq(plural(21, ...K), 'кредит');
+    a.eq(plural(0, ...K), 'кредитов');
   });
 };
