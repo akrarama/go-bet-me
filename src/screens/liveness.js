@@ -11,6 +11,9 @@ import { setHold } from './idle.js';
 import { coach, drawWristRing } from './lobby.js';
 
 const LOW_SEC = 2; // последние секунды: кольцо и цифра жёлтые
+/** Подсказка-вердикт («не тот жест», «не та рука»): один код, новый совет сразу сменяет старый;
+ *  ttl: совет уходит сам, и снова видны подсказки руки (у них priority 1). */
+export const VERDICT_HINT = { code: 'liveness', level: 'warn', speak: false, priority: 2, ttl: 1800 };
 const PASS_DELAY_MS = 700; // «Есть!» видно перед LIVE
 
 let lastTask = null; // следующее задание не повторяет прошлое
@@ -78,8 +81,7 @@ export default {
         r.done = true;
         ctx.app.go('LOBBY', { reason: 'liveness', task });
       } else if (v.hint) {
-        // код с текстом: у руки два разных совета, и каждый должен смениться сразу
-        ctx.feedback.hint(v.hint, { code: `liveness:${v.hint}`, level: 'warn', speak: false, priority: 2 });
+        ctx.feedback.hint(v.hint, VERDICT_HINT);
         sound.play('error');
       }
     };

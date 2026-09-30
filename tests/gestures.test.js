@@ -4,6 +4,8 @@
 import { GESTURES } from '../src/config.js';
 import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT } from '../src/vision/gestures.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
+import { createFeedback } from '../src/feedback.js';
+import { VERDICT_HINT } from '../src/screens/liveness.js';
 
 const G = GESTURES;
 const STEP = 50;
@@ -692,6 +694,39 @@ export default (t) => {
     // слабый жест, который ещё не срабатывал, по-прежнему не срабатывает
     const weak = createGestureGate(G);
     a.eq(show(weak, 'Thumb_Up', 0, 3000, G.minScore - 0.05).length, 0);
+  });
+
+  t.test('проверка вживую: совет «не та рука» сменяется сразу и уходит сам, подсказки руки снова видны', (a) => {
+    let now = 0;
+    let timers = [];
+    const env = {
+      now: () => now,
+      later(fn, ms) {
+        const tm = { at: now + ms, fn };
+        timers.push(tm);
+        return () => (timers = timers.filter((x) => x !== tm));
+      },
+      voice: () => false,
+      synth: () => null,
+      utterance: (text) => ({ text }),
+      sound: () => {},
+    };
+    const to = (t) => {
+      now = t;
+      for (const tm of timers.filter((x) => x.at <= t).sort((p, q) => p.at - q.at)) {
+        timers = timers.filter((x) => x !== tm);
+        tm.fn();
+      }
+    };
+    const fb = createFeedback(env);
+    const coachHint = { code: 'hand-low', level: 'info', speak: false, priority: 1 };
+    a.ok(fb.hint('Это правая рука. Подними левую', VERDICT_HINT));
+    to(500);
+    a.ok(fb.hint('Подними только левую руку', VERDICT_HINT), 'второй совет сразу сменяет первый');
+    to(600);
+    a.eq(fb.hint('Подними левую руку выше головы', coachHint), false, 'пока совет на экране, подсказка руки ждёт');
+    to(2400);
+    a.ok(fb.hint('Подними левую руку выше головы', coachHint), 'совет ушёл сам, подсказка руки видна');
   });
 
   t.test('проверка вживую: ладонь, поднятая для старта в LOBBY, не выпадает заданием', (a) => {
