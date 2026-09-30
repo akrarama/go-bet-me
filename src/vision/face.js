@@ -102,3 +102,34 @@ export function noseTracker(windowMs = 1000) {
     },
   };
 }
+
+/**
+ * Синтетическое лицо для проверки без человека в кадре (?debug=1, клавиша k в медитации): 478 точек,
+ * овал, веки по blinkV (0 открыты, 1 закрыты), радужки, нос; остальные точки в центре. Координаты 0..1.
+ */
+export function syntheticFace(cx = 0.5, cy = 0.5, blinkV = 0.9) {
+  const pts = Array.from({ length: 478 }, () => ({ x: cx, y: cy, z: 0 }));
+  const n = FACE.oval.length;
+  FACE.oval.forEach((idx, i) => {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    pts[idx] = { x: cx + 0.078 * Math.cos(a), y: cy + 0.2 * Math.sin(a), z: 0 };
+  });
+  const gap = 0.0105 * Math.max(0.06, Math.min(1, 1 - blinkV * 1.05));
+  const eye = (ex, ey, side, def, irisCenter, irisEdge) => {
+    // веки идут от внешнего уголка к внутреннему; side: +1 левый глаз (справа в кадре), -1 правый
+    def.upper.forEach((idx, k) => {
+      const t = k / (def.upper.length - 1);
+      pts[idx] = { x: ex + side * 0.019 * (1 - 2 * t), y: ey - gap * Math.sin(Math.PI * t), z: 0 };
+    });
+    def.lower.forEach((idx, k) => {
+      const t = k / (def.lower.length - 1);
+      pts[idx] = { x: ex + side * 0.019 * (1 - 2 * t), y: ey + gap * 0.7 * Math.sin(Math.PI * t), z: 0 };
+    });
+    pts[irisCenter] = { x: ex, y: ey, z: 0 };
+    pts[irisEdge] = { x: ex + 0.006, y: ey, z: 0 };
+  };
+  eye(cx + 0.034, cy - 0.045, 1, FACE.leftEye, 473, 474);
+  eye(cx - 0.034, cy - 0.045, -1, FACE.rightEye, 468, 469);
+  pts[FACE.nose] = { x: cx, y: cy + 0.035, z: 0 };
+  return pts;
+}

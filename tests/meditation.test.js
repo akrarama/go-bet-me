@@ -1,7 +1,7 @@
 // Тесты блока 4 (Медитация): глаза, неподвижность, лица, жизни, таймер. Синтетические кадры, без камеры.
 
 import { MEDITATION as M, MONEY } from '../src/config.js';
-import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW } from '../src/vision/face.js';
+import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW, syntheticFace } from '../src/vision/face.js';
 import { createController } from '../src/exercises/meditation.js';
 import friend, {
   REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural,
@@ -664,7 +664,7 @@ export default (t) => {
     a.eq(S.pending, null);
     a.eq(S.left, 5);
     a.eq(lobbyView(S).notice.text, 'Осталось только 5 кр., выбери меньше');
-    a.eq(lobbyView(msg(S, { t: 'bet:full', left: 0 })).notice.text, 'Пул уже полон, можно только смотреть');
+    a.eq(lobbyView(msg(S, { t: 'bet:full', left: 0 })).notice.text, 'Пул полон');
     const waiting = reduce(S, { type: 'bet:sent', amount: 5 });
     const late = reduce(waiting, { type: 'bet:timeout' });
     a.eq(late.pending, null);
@@ -673,8 +673,8 @@ export default (t) => {
     // новое лобби гасит предупреждение про остаток, но не «Ставка принята»
     a.eq(lobbyOf(S, { left: 10 }).notice, null);
     a.eq(lobbyOf(msg(S, { t: 'bet:ok', amount: 5 })).notice.tone, 'ok');
-    a.eq(lobbyView({ ...lobbyOf(initialState('h')), left: 0 }).notice.text, 'Пул уже полон, можно только смотреть');
-    a.eq(lobbyView({ ...lobbyOf(initialState('h'), { left: 20 }), balance: 3 }).notice.text, 'Не хватает кредитов для ставки');
+    a.eq(lobbyView({ ...lobbyOf(initialState('h')), left: 0 }).notice.text, 'Пул полон, можно только смотреть');
+    a.eq(lobbyView({ ...lobbyOf(initialState('h'), { left: 20 }), balance: 3 }).notice.text, 'Обнови страницу, чтобы пополнить кредиты');
   });
 
   t.test('friend: следующий раунд приходит с новым челленджем, тот же id итог не убирает', (a) => {
@@ -854,7 +854,7 @@ export default (t) => {
       a.eq(next.notice.tone, 'warn');
       return next.notice.text;
     };
-    a.eq(text('closed'), 'Ставки уже закрыты');
+    a.eq(text('closed'), 'Ставки закрыты');
     a.eq(text('repeat'), 'Ты уже поставил на этот раунд');
     a.eq(text('poor'), 'Не хватает кредитов');
     a.eq(text('offline'), 'Нет связи с игроком, попробуй ещё раз');
@@ -992,5 +992,202 @@ export default (t) => {
   t.test('friend: кнопки ставки те же, что принимает хост (MONEY.friend.bets)', (a) => {
     const S = { ...lobbyOf(initialState('h'), { left: 100 }), balance: 1000 };
     a.deep(betOptions(S).map((x) => x.amount), MONEY.friend.bets);
+  });
+
+  t.test('friend: новый челлендж в лобби сбрасывает ставку, «Ставка принята» и выбор кнопки', (a) => {
+    let S = { ...lobbyOf(initialState('h'), { left: 20 }), balance: 100 };
+    S = msg(S, { t: 'bet:ok', amount: 10 });
+    a.deep([S.myBet, S.notice.text, lobbyView(S).notice.text], [10, 'Ставка принята', 'Ставка принята']);
+    a.deep(betOptions(S).map((x) => x.selected), [false, true, false]);
+    const next = lobbyOf(S, { challenge: { ...CH, id: 'c2' }, left: 20, bets: [] });
+    a.eq(next.myBet, null);
+    a.eq(next.notice, null, 'подсказка прошлого раунда не переезжает в новый');
+    a.eq(lobbyView(next).notice, null);
+    a.deep(betOptions(next).map((x) => [x.selected, x.disabled]), [[false, false], [false, false], [false, false]]);
+    // то же лобби (пул поменялся): «Ставка принята» остаётся
+    a.eq(lobbyOf(S, { left: 10 }).myBet, 10);
+  });
+
+  t.test('friend: игрок меняет условия: ставки выключены, вместо них карточка «подожди»', (a) => {
+    const S = { ...lobbyOf(initialState('h'), { left: 20, note: 'setup' }), balance: 100 };
+    a.eq(S.note, 'setup');
+    a.eq(lobbyView(S).mode, 'setup');
+    a.deep(betOptions(S).map((x) => x.reason), ['setup', 'setup', 'setup']);
+    a.deep(lobbyView(S).notice, { tone: 'info', text: 'Игрок меняет условия, подожди' });
+    // условия готовы: новое лобби снимает режим
+    const ready = lobbyOf(S, { challenge: { ...CH, id: 'c2' }, left: 20, note: null });
+    a.eq(lobbyView(ready).mode, 'open');
+    a.deep(betOptions({ ...ready, balance: 100 }).map((x) => x.disabled), [false, false, false]);
+    a.eq(lobbyOf(S, { note: { x: 1 } }).note, null, 'пометка не строка: не верим');
+  });
+
+  t.test('friend: игрок стартует: «ставки закрыты» вместо «Пул полон»', (a) => {
+    const S = { ...lobbyOf(initialState('h'), { left: 0, open: false, note: 'starting' }), balance: 100 };
+    a.eq(S.open, false);
+    a.deep(lobbyView(S).notice, { tone: 'info', text: 'Игрок стартует, ставки закрыты' });
+    a.deep(betOptions(S).map((x) => x.reason), ['closed', 'closed', 'closed']);
+    a.eq(lobbyView(S).foot, '', 'нечего обещать: ставки закрыты');
+    // ставки закрыты без пометки
+    a.eq(lobbyView(lobbyOf(initialState('h'), { left: 5, open: false })).notice.text, 'Ставки закрыты');
+    // моя ставка уже принята: подпись говорит, что игрок стартует
+    const mine = msg({ ...lobbyOf(initialState('h'), { left: 5 }), balance: 100 }, { t: 'bet:ok', amount: 5 });
+    const starting = lobbyOf(mine, { left: 0, open: false, note: 'starting' });
+    a.deep(lobbyView(starting).notice, { tone: 'ok', text: 'Ставка принята' });
+    a.eq(lobbyView(starting).foot, 'Ты поставил 5 кр. против. Игрок стартует');
+    // сообщение bet:closed закрывает ставки
+    const closed = msg({ ...lobbyOf(initialState('h'), { left: 5 }), balance: 100 }, { t: 'bet:closed' });
+    a.deep([closed.open, closed.pending, lobbyView(closed).notice.text], [false, null, 'Ставки закрыты']);
+    a.eq(lobbyOf(closed).open, true, 'новое лобби с open не false открывает ставки снова');
+  });
+
+  t.test('friend: игрок отключился (void left): ставка вернулась, кнопка «Повторить», следующего раунда нет', (a) => {
+    let S = msg({ ...lobbyOf(initialState('h'), { left: 20 }), balance: 100 }, { t: 'bet:ok', amount: 5 });
+    S = msg(S, { t: 'start', challenge: CH }, 0);
+    const gone = msg(S, { t: 'void', reason: 'left' });
+    a.eq(gone.phase, 'void');
+    const v = voidView(gone);
+    a.deep([v.title, v.detail, v.retry], ['Игрок отключился', 'Ставка вернулась. Попроси новую ссылку', true]);
+    const noBet = msg(msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0), { t: 'void', reason: 'left' });
+    a.eq(voidView(noBet).detail, 'Попроси у игрока новую ссылку', 'без ставки про ставку не говорим');
+    a.eq(voidView(msg(S, { t: 'void', reason: 'camera' })).retry, false, 'обычная отмена: ждём следующий раунд');
+  });
+
+  t.test('friend: пополнение кредитов: плашка на время, подсказка про пустой кошелёк', (a) => {
+    let S = { ...lobbyOf(initialState('h'), { left: 20 }) };
+    S = reduce(S, { type: 'wallet', balance: 3, delta: 0, reason: 'sync' });
+    a.eq(S.topup, null);
+    a.eq(lobbyView(S).notice.text, 'Обнови страницу, чтобы пополнить кредиты', 'меньше 5 кр. и пополнения не было');
+    a.deep(betOptions(S).map((x) => x.reason), ['balance', 'balance', 'balance']);
+    S = reduce(S, { type: 'wallet', balance: 100, delta: 97, reason: 'topup' });
+    a.deep([S.topup, S.balance], [100, 100]);
+    a.eq(lobbyView(S).notice, null, 'кредиты есть: подсказки нет');
+    a.eq(reduce(S, { type: 'wallet', balance: 95, delta: -5, reason: 'hold' }).topup, 100, 'другая причина плашку не сбрасывает');
+    S = reduce(S, { type: 'topup:drop' });
+    a.eq(S.topup, null);
+    a.eq(reduce(S, { type: 'topup:drop' }), S);
+    // пополнили, но всё равно мало (кривые данные): подсказка не спорит с плашкой
+    const low = reduce({ ...lobbyOf(initialState('h'), { left: 20 }) }, { type: 'wallet', balance: 2, reason: 'topup' });
+    a.eq(lobbyView(low).notice, null);
+  });
+
+  t.test('friend: заглушка играет особые случаи лобби теми же сообщениями', (a) => {
+    const out = [];
+    const ctx = { bus: { emit: (type, p) => out.push([type, p]) }, timeout: (fn) => fn(), debug: { log() {} } };
+    const g = createStubGuest(ctx);
+    let S = initialState('demo');
+    const pump = () => {
+      for (const [type, p] of out.splice(0)) {
+        if (type === 'guest:status') S = reduce(S, { type: 'status', status: p.status });
+        if (type === 'guest:msg') S = reduce(S, { type: 'msg', msg: p.msg, now: 0, myBet: g.myBet });
+        if (type === 'guest:wallet') S = reduce(S, { type: 'wallet', balance: p.balance, delta: p.delta, reason: p.reason });
+      }
+    };
+    g.connect();
+    pump();
+    g.special(); // игрок меняет условия
+    pump();
+    a.eq(lobbyView(S).mode, 'setup');
+    g.special(); // новый челлендж
+    pump();
+    a.eq(lobbyView(S).mode, 'open');
+    g.special(); // игрок стартует
+    pump();
+    a.eq(lobbyView(S).notice.text, 'Игрок стартует, ставки закрыты');
+    g.special(); // ставки закрыты
+    pump();
+    a.eq(S.open, false);
+    g.special(); // пополнение
+    pump();
+    a.eq(S.topup, 100);
+    g.special(); // игрок отключился
+    pump();
+    a.eq(S.phase, 'void');
+    a.eq(voidView(S).retry, true);
+  });
+
+  t.test('ready: у непройденной галочки своя подсказка, верхняя подсказка от первой непройденной', (a) => {
+    const c = createController({ challenge: { target: 60 }, bus: { emit() {} }, feedback: { hint() {}, clear() {}, clearNow() {}, say() {} }, debug: { enabled: false, set() {} } });
+    const at = (faces) => ({ t: T0, ran: 'face', width: W, height: H, face: { t: T0, faces, blendshapes: faces.map(() => OPEN) } });
+    const none = c.ready(at([]));
+    a.ok(none.hint.includes('Лица не видно'), none.hint);
+    a.eq(none.checks[0].hint, none.hint, 'подсказка первой галочки');
+    a.eq(none.checks[1].hint, undefined, 'второй галочке нечего сказать: лица нет вообще');
+    const edge = c.ready(at([face(1.02, 0.45)]));
+    a.ok(edge.hint.includes('у края кадра'), edge.hint);
+    const crowd = c.ready(at([face(), face(0.8, 0.5, 0.07)]));
+    a.eq(crowd.checks[0].ok, true);
+    a.ok(crowd.hint.includes('второй человек'), crowd.hint);
+    a.eq(crowd.checks[1].hint, crowd.hint);
+    const fine = c.ready(at([face()]));
+    a.deep([fine.ok, fine.hint], [true, null]);
+    a.eq(fine.checks.every((chk) => !('hint' in chk)), true, 'у пройденных галочек подсказки нет');
+    for (const r of [none, edge, crowd]) a.ok(r.hint.length <= 70, `подсказка короткая: ${r.hint}`);
+    a.eq(c.ready(undefined).hint, none.hint, 'кадра нет: как «лица не видно»');
+  });
+
+  t.test('виртуальное лицо: синтетические точки, глаза открыты и закрыты, нос на месте', (a) => {
+    const closed = syntheticFace(0.4, 0.5, 0.9);
+    const open = syntheticFace(0.4, 0.5, 0.05);
+    a.eq(closed.length, 478);
+    a.deep([closed[FACE.nose].x, +closed[FACE.nose].y.toFixed(3)], [0.4, 0.535]);
+    const gap = (f) => f[FACE.leftEye.lower[4]].y - f[FACE.leftEye.upper[4]].y;
+    a.ok(gap(open) > gap(closed) * 3, `открытый глаз шире закрытого (${gap(open).toFixed(4)} против ${gap(closed).toFixed(4)})`);
+    // овал вокруг центра: по ширине примерно 0.156 кадра
+    const xs = FACE.oval.map((i) => closed[i].x);
+    a.near(Math.max(...xs) - Math.min(...xs), 0.156, 0.01);
+    a.ok(closed.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    a.eq(primaryIndex([closed, syntheticFace(0.8, 0.5, 0.9)], { x: 0.41, y: 0.5 }), 0, 'главное лицо ближе к прошлому носу');
+  });
+
+  t.test('виртуальное лицо по клавише k: контроллер видит лицо без человека в кадре, e n l y работают', (a) => {
+    const keys = {};
+    const seen = { faults: [] };
+    const c = createController({
+      challenge: { target: 60 },
+      bus: { emit: (type, p) => type === 'fault' && seen.faults.push(p.code) },
+      feedback: { hint() {}, clear() {}, clearNow() {}, say() {} },
+      debug: { enabled: true, set() {}, key: (k, fn) => (keys[k] = fn) },
+    });
+    a.ok(['k', 'e', 'n', 'l', 'y'].every((k) => typeof keys[k] === 'function'), 'клавиши на месте');
+    const empty = { t: T0, ran: 'face', width: W, height: H, face: { t: T0, faces: [], blendshapes: [] } };
+    a.eq(c.ready(empty).ok, false, 'человека нет');
+    keys.k();
+    a.eq(c.ready(empty).ok, true, 'виртуальное лицо: обе галочки');
+    keys.y();
+    a.deep(c.ready(empty).checks.map((x) => x.ok), [true, false], 'второй человек');
+    keys.y();
+    keys.l();
+    a.deep(c.ready(empty).checks.map((x) => x.ok), [false, false], 'лицо пропало');
+    keys.l();
+    let now = T0;
+    const step = (ms) => {
+      for (let i = 0; i < ms / STEP; i++) {
+        now += STEP;
+        c.frame({ t: now, ran: 'face', width: W, height: H, face: null }, now); // модель ничего не вернула
+      }
+    };
+    c.start(T0);
+    step(8000);
+    a.ok(c.count > 6.5, `виртуальное лицо с закрытыми глазами: таймер идёт (${c.count.toFixed(1)} с)`);
+    a.eq(c.view.faces, 1);
+    a.deep(seen.faults, []);
+    keys.e();
+    keys.e(); // авто → закрыты → открыты
+    const before = c.count;
+    step(2600);
+    a.deep(seen.faults, ['eyes_open']);
+    a.eq(c.lives, 2);
+    a.ok(c.count - before < 0.2, 'глаза открыты: таймер стоит');
+    keys.e(); // открыты → авто (закрыты)
+    step(4500);
+    keys.n(); // рывок головой
+    step(2000);
+    a.deep(seen.faults, ['eyes_open', 'head_moving']);
+    keys.l();
+    step(2600);
+    a.deep(seen.faults, ['eyes_open', 'head_moving', 'face_lost']);
+    a.eq(c.lives, 0);
+    step(1700);
+    a.eq(c.failed, true, 'три жизни: провал');
   });
 };
