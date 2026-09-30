@@ -244,11 +244,12 @@ export function createController({ challenge, bus, feedback, debug }) {
       const pose = frame.pose;
       if (!pose?.landmarks || frame.t - pose.t > VISION.staleMs) return;
       const highlight = feedback?.highlight ?? new Set();
-      draw.pose(pose.landmarks, { highlight });
+      const shown = draw.smoothPose ? draw.smoothPose(pose) : pose.landmarks; // сглаженные точки: скелет и дуга совпадают
+      draw.pose(shown, { highlight });
       if (!last || last.lm !== pose.landmarks || last.m.body == null) return;
       const { shoulder, hip, ankle } = last.idx;
       const tone = highlight.has(hip) ? 'bad' : counting ? 'deep' : 'idle';
-      drawAngle(draw, pose.landmarks[shoulder], pose.landmarks[hip], pose.landmarks[ankle], last.m.body, tone, null, frame.t);
+      drawAngle(draw, shown[shoulder], shown[hip], shown[ankle], last.m.body, tone, null, frame.t);
     },
   };
   return c;

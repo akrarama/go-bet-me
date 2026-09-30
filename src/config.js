@@ -39,11 +39,15 @@ export const APP = {
 };
 
 const MP = '0.10.35';
+/** Вариант модели позы: full (по умолчанию), lite или heavy через ?pose=. */
+export const POSE_MODEL = ['lite', 'full', 'heavy'].includes(param('pose')) ? param('pose') : 'full';
 export const VISION = {
   bundle: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP}/vision_bundle.mjs`,
   wasm: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP}/wasm`,
   models: {
-    pose: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+    // full точнее lite на руках и ногах (дальняя сторона и кисти меньше прыгают), 9 МБ вместо 5,5.
+    // ?pose=lite вернуть прежнюю модель (сравнение на роликах, слабый телефон)
+    pose: `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${POSE_MODEL}/float16/1/pose_landmarker_${POSE_MODEL}.task`,
     gesture: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task',
     face: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
   },
@@ -52,6 +56,15 @@ export const VISION = {
   numFaces: 2, // второй человек в кадре = нарушение медитации
   preload: ['gesture', 'pose', 'face'], // порядок фоновой загрузки
   staleMs: 400, // результат модели старше этого не рисуем
+  // Скелет на экране (draw.js, vision/smooth.js): фильтр One Euro на каждую точку, дальняя сторона бледнее.
+  smooth: {
+    minCutoff: 1.0, // Гц: меньше = глаже в покое (дрожание точек), больше = живее
+    beta: 1, // рост частоты среза со скоростью (координаты 0..1 в секунду): рывок на 60% кадра догоняет за 0,2 с с отставанием 1%
+    //          дрожь ±1% кадра в покое гасится в 10 раз
+    resetMs: 500, // пауза в данных дольше: фильтр с нуля, без «хвоста» от прошлой позы
+    farSideGap: 0.12, // средняя visibility сторон отличается больше: человек в профиль, дальняя сторона бледная
+    // (ролики: в профиль разница 0.2..0.46, лицом к камере 0..0.03)
+  },
 };
 
 /** Типы челленджей. SETUP берёт варианты отсюда. limitSec: null = без лимита времени. */

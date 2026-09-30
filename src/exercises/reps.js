@@ -572,11 +572,12 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
       const pose = frame.pose;
       if (!pose?.landmarks || frame.t - pose.t > VISION.staleMs) return;
       const highlight = feedback?.highlight ?? new Set();
-      draw.pose(pose.landmarks, { highlight });
+      const shown = draw.smoothPose ? draw.smoothPose(pose) : pose.landmarks; // сглаженные точки: скелет и дуга совпадают
+      draw.pose(shown, { highlight });
       if (!last || last.lm !== pose.landmarks || counter.angle == null || gateFrames) return;
       const [a, b, cc] = def.angle.map((key) => last.idx[key]);
       const tone = highlight.has(b) ? 'bad' : counter.armed && counter.phase === 'DOWN' ? 'deep' : 'idle';
-      drawAngle(draw, pose.landmarks[a], pose.landmarks[b], pose.landmarks[cc], counter.angle, tone, flash, frame.t);
+      drawAngle(draw, shown[a], shown[b], shown[cc], counter.angle, tone, flash, frame.t);
     },
   };
   return c;
