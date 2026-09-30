@@ -150,7 +150,7 @@ export const MONEY = {
 // ─── Блок 4: Медитация ──────────────────────────────────────────
 
 export const MEDITATION = {
-  eyesClosedMin: 0.5, // (eyeBlinkLeft + eyeBlinkRight) / 2
+  eyesClosedMin: 0.4, // (eyeBlinkLeft + eyeBlinkRight) / 2; не 0.5: в очках и при тусклом свете закрытые глаза дают 0.4-0.6, открытые обычно ниже 0.3
   eyesHysteresis: 0.08, // закрытые глаза считаем открытыми, только когда ниже eyesClosedMin − это (не мигает на пороге)
   eyesEma: 0.5, // сглаживание моргания
   headMoveMax: 0.04, // смещение носа за 1 с, доля ширины кадра

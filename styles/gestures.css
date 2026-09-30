@@ -396,7 +396,7 @@
   .setup-label { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; }
   .setup-options { gap: 8px; }
   .setup-opt { min-height: 68px; padding: 8px 6px; font-size: 15px; }
-  .setup-opt--type { flex-direction: column; gap: 4px; }
+  .setup-opt--type { flex-direction: column; gap: 4px; padding-inline: 2px; font-size: clamp(11px, 3.6vw, 15px); } /* «Приседания» влезает и на 320 px */
   .setup-emoji { font-size: 24px; }
   .setup-val { text-align: center; }
   .setup-num { font-size: 24px; }
