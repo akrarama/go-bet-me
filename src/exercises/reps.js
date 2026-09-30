@@ -570,7 +570,8 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
         { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: sight.hintFor(reason) }) },
         ...(def.checks ?? []).map(({ id, text, hint, test, soft }) => {
           const ok = m != null && Boolean(test(m, cfg, lm));
-          const chk = m != null && !ok && hint ? { id, text, ok, hint } : { id, text, ok };
+          const why = m != null && !ok && hint ? (typeof hint === 'function' ? hint(m, cfg) : hint) : null; // hint(m, cfg): текст по причине
+          const chk = why ? { id, text, ok, hint: why } : { id, text, ok };
           return soft ? { ...chk, soft: true } : chk;
         }),
       ];

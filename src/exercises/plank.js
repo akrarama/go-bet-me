@@ -14,7 +14,7 @@
 import { REPS, VISION } from '../config.js';
 import { angle, dist } from '../vision/geometry.js';
 import { alphaFor, createHolds, createSight, drawAngle, PRIORITY, readyResult, SIDE_CHECK } from './reps.js';
-import { GATES as PUSHUP_GATES, RULES as PUSHUP_RULES, isPlank, measure as pushupMeasure } from './pushup.js';
+import { GATES as PUSHUP_GATES, RULES as PUSHUP_RULES, gateFor, isPlank, measure as pushupMeasure } from './pushup.js';
 
 const SIDE_KEYS = ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'];
 const GATE = 'pose_gate'; // код подсказки «прими упор лёжа», пока человек ещё не вставал в планку
@@ -50,7 +50,7 @@ export function readyChecks(m, cfg) {
   let hint = null;
   if (m != null && plank && !line) hint = RULES.knees.test(m, cfg) ? RULES.knees.hint : m.hipBelow > 0 ? RULES.sag.hint : RULES.pike.hint;
   return [
-    { id: 'plank', text: 'Упор лёжа', ok: plank, hint: m != null && !plank ? PUSHUP_GATES.plank.hint : null },
+    { id: 'plank', text: 'Упор лёжа', ok: plank, hint: m != null && !plank ? gateFor(m, cfg).hint : null },
     { id: 'line', text: 'Тело ровное', ok: line, hint },
   ];
 }
@@ -184,7 +184,7 @@ export function createController({ challenge, bus, feedback, debug }) {
       feedback?.hint(top.hint, { code: top.code, priority: PRIORITY.form, joints: jointsOf(top), level: 'warn', speak: true });
       return;
     }
-    if (holds.active(GATE)) feedback?.hint(PUSHUP_GATES.plank.hint, { code: GATE, priority: PRIORITY.visibility, level: 'info', speak: true });
+    if (holds.active(GATE)) feedback?.hint((last?.m ? gateFor(last.m, cfg) : null)?.hint ?? PUSHUP_GATES.plank.hint, { code: GATE, priority: PRIORITY.visibility, level: 'info', speak: true });
   }
 
   function report() {

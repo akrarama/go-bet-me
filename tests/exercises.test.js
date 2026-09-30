@@ -4,6 +4,8 @@
 import * as dips from '../src/exercises/dips.js';
 import * as pullup from '../src/exercises/pullup.js';
 import * as burpee from '../src/exercises/burpee.js';
+import * as pushup from '../src/exercises/pushup.js';
+import * as plank from '../src/exercises/plank.js';
 import { faultTheme, poolFor } from '../src/friends/bots.js';
 import { streakText } from '../src/screens/result.js';
 import { CHALLENGES } from '../src/config.js';
@@ -227,6 +229,72 @@ export default (t) => {
 
   t.test('берпи: пока человек не постоял, круги не считаются (начал из упора)', (a) => {
     a.deep(got(run([...circle().slice(0, 40)])), []);
+  });
+
+  // ─── Лёжа на полу это не упор лёжа (отжимания, планка, берпи) ───
+  /**
+   * Сбоку, кадр квадратный. Ноги (таз, колено, щиколотка) на линии пола y 0.8.
+   * lying: плечо тоже на полу, руки вытянуты вперёд по полу, локоть приподнят так, что угол локтя = elbow.
+   * иначе упор: запястье под плечом на полу, плечо поднято руками (угол локтя = elbow).
+   */
+  function floorPose({ elbow = 170, lying = false } = {}) {
+    const lm = blank();
+    const W = lying ? { x: 0.12, y: 0.8 } : { x: 0.3, y: 0.8 };
+    let S;
+    let E;
+    if (lying) {
+      S = { x: 0.3, y: 0.79 };
+      const half = (S.x - W.x) / 2;
+      E = { x: W.x + half, y: 0.8 - half / Math.tan(rad(elbow / 2)) };
+    } else {
+      const a = 0.12;
+      const d = a * Math.sqrt(2 - 2 * Math.cos(rad(elbow)));
+      S = { x: 0.3, y: 0.8 - d };
+      E = { x: 0.3 - Math.sqrt(Math.max(0, a * a - (d / 2) ** 2)), y: 0.8 - d / 2 };
+    }
+    const legs = { hip: { x: 0.55, y: lying ? 0.8 : (S.y + 0.8) / 2 + 0.01 }, knee: { x: 0.7, y: lying ? 0.8 : 0.8 - (0.8 - S.y) * 0.25 }, ankle: { x: 0.86, y: 0.8 } };
+    [[11, S], [13, E], [15, W], [23, legs.hip], [25, legs.knee], [27, legs.ankle], [29, { x: 0.88, y: 0.8 }], [31, { x: 0.9, y: 0.79 }]].forEach(([i, p]) => put(lm, i, p));
+    [[12, S], [14, E], [16, W], [24, legs.hip], [26, legs.knee], [28, legs.ankle], [30, { x: 0.88, y: 0.8 }], [32, { x: 0.9, y: 0.79 }]].forEach(([i, p]) => put(lm, i, { x: p.x + 0.01, y: p.y - 0.005 }, 0.55));
+    put(lm, 0, { x: S.x - 0.06, y: S.y - 0.03 });
+    return lm;
+  }
+  const readyOf = (mod, lm) => {
+    const s = setup(mod);
+    let r = null;
+    for (let i = 0; i < 10; i++) r = s.ctrl.ready({ t: 1 + i * 33, width: 1000, height: 1000, pose: { t: 1 + i * 33, landmarks: lm } }, 1 + i * 33);
+    return r;
+  };
+
+  t.test('упор лёжа: руки держат тело ✓, лёжа на полу ✗ с подсказкой «поднимись на руки»', (a) => {
+    for (const mod of [pushup, plank]) {
+      const up = readyOf(mod, floorPose());
+      a.eq(up.checks.find((c) => c.id === 'plank').ok, true, 'в упоре');
+      const down = readyOf(mod, floorPose({ lying: true }));
+      a.eq(down.checks.find((c) => c.id === 'plank').ok, false, 'лёжа');
+      a.eq(down.ok, false);
+      a.ok(/лежишь/.test(down.hint), `подсказка: ${down.hint}`);
+    }
+  });
+
+  t.test('отжимания: лёжа на полу «качает» руками, повторы не считаются; в упоре те же углы считаются', (a) => {
+    const lying = feed(setup(pushup), reps(3, (e) => floorPose({ elbow: e, lying: true }), 165, 80));
+    a.eq(lying.ctrl.count, 0);
+    a.ok(lying.hints.some((h) => /лежишь/.test(h.text)), 'подсказка «поднимись на руки»');
+    const real = feed(setup(pushup), reps(3, (e) => floorPose({ elbow: e }), 165, 80));
+    a.eq(real.ctrl.count, 3);
+  });
+
+  t.test('планка: лёжа на полу время не идёт, в упоре идёт', (a) => {
+    const lying = feed(setup(plank), Array(150).fill(floorPose({ lying: true })));
+    a.ok(lying.ctrl.count < 0.5, `лёжа ${lying.ctrl.count.toFixed(2)} с`);
+    const real = feed(setup(plank), Array(150).fill(floorPose()));
+    a.ok(real.ctrl.count > 3.5, `в упоре ${real.ctrl.count.toFixed(2)} с`);
+  });
+
+  t.test('берпи: лёжа на полу не упор лёжа', (a) => {
+    const m = { knee: 175, elbow: 170, tilt: 3, handsDown: true, armsUp: false, ankleY: 0.8 };
+    a.eq(burpee.classify({ ...m, support: 0.02 }), 'move');
+    a.eq(burpee.classify({ ...m, support: 0.95 }), 'plank');
   });
 
   // ─── Вокруг упражнений: боты, итоги, config ───

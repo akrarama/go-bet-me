@@ -8,7 +8,7 @@
 // Пороги в config.REPS.burpee, калибровка по ролику fixtures/burpee (сбоку, 15 fps, модель full).
 
 import { REPS, VISION } from '../config.js';
-import { angle, tiltFromVertical } from '../vision/geometry.js';
+import { angle, dist, tiltFromVertical } from '../vision/geometry.js';
 import { alphaFor, createHolds, createSight, describeRejected, PRIORITY, readyResult, SIDE_CHECK } from './reps.js';
 
 const SIDE_KEYS = ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'];
@@ -30,6 +30,8 @@ export function measure({ lm, idx, aspect, sm }) {
   const wrist = lm[idx.wrist];
   const knee = lm[idx.knee];
   const ankle = lm[idx.ankle];
+  const elbow = lm[idx.elbow];
+  const arm = dist(shoulder, elbow, aspect) + dist(elbow, wrist, aspect);
   return {
     knee: sm('knee', angle(lm[idx.hip], knee, ankle, aspect)),
     elbow: sm('elbow', angle(shoulder, lm[idx.elbow], wrist, aspect)),
@@ -37,12 +39,14 @@ export function measure({ lm, idx, aspect, sm }) {
     handsDown: wrist.y > knee.y, // кисти ниже колен: руки на полу (присед или упор)
     armsUp: wrist.y < shoulder.y, // руки над плечами: прыжок с руками вверх
     ankleY: ankle.y,
+    support: arm > 0 ? (wrist.y - shoulder.y) / arm : 0, // плечо над запястьем в длинах руки (как у отжиманий)
   };
 }
 
 /** Поза кадра для машины фаз. */
 export function classify(m, cfg = REPS.burpee) {
-  if (m.handsDown && m.tilt < cfg.plankMaxTilt && m.knee > cfg.plankKneeMin) return 'plank';
+  // упор лёжа: руки держат тело (лёжа на полу плечи на уровне кистей, это не упор)
+  if (m.handsDown && m.tilt < cfg.plankMaxTilt && m.knee > cfg.plankKneeMin && (m.support ?? 1) >= cfg.supportMin) return 'plank';
   if (m.handsDown && m.knee < cfg.crouchKneeMax) return 'crouch';
   if (!m.handsDown && m.tilt > cfg.standMinTilt && m.knee > cfg.standKneeMin) return 'stand';
   return 'move';
