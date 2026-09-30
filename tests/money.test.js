@@ -211,7 +211,7 @@ function moneyTests(t) {
 
 // ─── Кошелёк (src/wallet.js) ─────────────────────────────────────
 
-import { createWallet } from '../src/wallet.js';
+import { createWallet, badgeOf } from '../src/wallet.js';
 
 /** Память вместо localStorage. fail: запись бросает ошибку, как в приватном режиме. */
 function memory({ fail = false } = {}) {
@@ -261,6 +261,93 @@ function walletTests(t) {
     a.eq(again.round.id, res.round.id);
   });
 
+  t.test('кошелёк: две вкладки, вторая не считает живой раунд первой брошенным, оба раунда доигрываются', (a) => {
+    const storage = memory();
+    const A = createWallet({ storage, tab: 'A' });
+    const chA = challenge();
+    A.hold(chA);
+    a.eq(A.balance, 90);
+    const B = createWallet({ storage, tab: 'B' }); // вторая вкладка открылась и прочитала общее хранилище
+    a.eq(B.balance, 90);
+    a.eq(B.open.tab, 'A', 'видит раунд первой вкладки');
+    const chB = challenge();
+    B.hold(chB); // раунд A не должен быть закрыт как брошенный
+    a.eq(B.balance, 80);
+    a.eq(B.open.tab, 'B');
+    A.reload(); // вкладка A получила событие storage
+    a.eq(A.balance, 80);
+    a.eq(A.ownOpen.challengeId, chA.id, 'свой раунд A по-прежнему открыт');
+    a.eq(A.open.challengeId, chB.id, 'а последний открытый чужой');
+    a.ok(A.end(finished(chA, true)), 'A доигрывает свой раунд, а не чужой');
+    a.eq(A.settle(chA.id).round.status, 'settled');
+    a.eq(A.balance, 99, '80 + 19');
+    B.reload();
+    a.ok(B.end(finished(chB, false)));
+    B.settle(chB.id);
+    a.eq(B.balance, 99, 'B проиграл: 99, ставка B ушла');
+    const rs = B.history.filter((h) => h.kind === 'round');
+    a.deep(rs.map((r) => r.status), ['settled', 'settled']);
+  });
+
+  t.test('кошелёк: recover пропускает названные раунды; hold заменяет свой брошенный и раунд без метки', (a) => {
+    const storage = memory();
+    const old = createWallet({ storage }); // без метки: раунд «из прошлой версии»
+    old.hold(challenge());
+    const A = createWallet({ storage, tab: 'A' });
+    a.eq(A.recover('x', { skip: () => true }).length, 0, 'skip: ничего не тронули');
+    a.eq(A.balance, 90);
+    A.hold(challenge()); // раунд без метки заменяется, как раньше
+    a.eq(A.history.filter((h) => h.kind === 'round' && h.status === 'refunded').length, 1);
+    a.eq(A.balance, 90, 'вернули 10 и списали 10');
+    const own = challenge();
+    A.hold(own);
+    a.eq(A.history.filter((h) => h.kind === 'round' && h.status === 'refunded').length, 2, 'свой брошенный раунд заменился');
+    const B = createWallet({ storage, tab: 'B' });
+    a.eq(B.recover().length, 1, 'без skip восстановление забирает всё, что открыто');
+    a.eq(B.balance, 100);
+  });
+
+  t.test('кошелёк: отмена и итог находят свой раунд, даже если последний открытый чужой', (a) => {
+    const storage = memory();
+    const A = createWallet({ storage, tab: 'A' });
+    const chA = challenge();
+    A.hold(chA);
+    const B = createWallet({ storage, tab: 'B' });
+    const chB = challenge();
+    B.hold(chB);
+    A.reload();
+    a.eq(A.refund('camera', chA.id).status, 'refunded', 'A отменяет свой раунд, чужой остаётся');
+    a.eq(A.round(chB.id).status, 'held');
+    a.eq(A.refund('void', 'нет-такого'), null);
+    a.eq(A.balance, 90, 'вернули ставку A, ставка B ещё держится');
+  });
+
+  t.test('кошелёк: бейдж у баланса при расчёте показывает чистый итог раунда, как карточка итогов', (a) => {
+    const w = createWallet({ storage: memory() });
+    const changes = [];
+    w.subscribe((c) => changes.push(c));
+    const win = challenge();
+    play(w, win, true);
+    a.deep(changes.map((c) => c.reason), ['hold', 'settle']);
+    a.eq(badgeOf(changes[0]), -10, 'на Старте бейдж «−10»');
+    a.eq(changes[1].delta, 19, 'на счёт выплата вместе со ставкой');
+    a.eq(badgeOf(changes[1]), 9, 'а бейдж чистый итог +9, как на карточке');
+    changes.length = 0;
+    play(w, challenge(), false);
+    a.eq(badgeOf(changes[0]), -10);
+    a.eq(changes[1].delta, 0, 'проиграл: на счёт ничего не пришло');
+    a.eq(badgeOf(changes[1]), -10, 'бейдж показывает −10, как карточка');
+    changes.length = 0;
+    play(w, challenge({ bets: [] }), true);
+    a.eq(badgeOf(changes[1]), 0, 'соло, сделал: чистый итог 0, бейджа нет');
+    changes.length = 0;
+    const cancelled = challenge();
+    w.hold(cancelled);
+    w.refund('camera', cancelled.id);
+    a.eq(badgeOf(changes[1]), 10, 'отмена: вернулась ставка, бейдж +10');
+    a.eq(badgeOf({ reason: 'topup', delta: 5 }), 5);
+  });
+
   t.test('кошелёк: ставка больше баланса урезается до баланса, в минус не уходим', (a) => {
     const w = createWallet({ storage: memory(), start: 3 });
     const ch = challenge({ stake: 10 });
@@ -300,6 +387,44 @@ function walletTests(t) {
     w.end(finished(ok, true));
     w.settle(ok.id);
     a.eq(w.balance, 0);
+  });
+
+  t.test('кошелёк: друг ушёл посреди раунда, его ставка выходит из расчёта, комиссии с неё нет', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ stake: 20, bets: [bet('bot-1', 5, { bot: true }), bet('peer:f1', 5, { name: 'Лиса', avatar: '🦊' }), bet('peer:f2', 5)] });
+    w.hold(ch);
+    a.eq(w.balance, 80);
+    a.ok(w.withdraw(ch.id, 'peer:f1'), 'снята');
+    a.eq(w.withdraw(ch.id, 'peer:f1'), null, 'второй раз нечего');
+    a.eq(w.withdraw(ch.id, 'нет-такого'), null);
+    a.eq(w.withdraw('другой-челлендж', 'peer:f2'), null);
+    w.end(finished(ch, true));
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.pool, 10, 'в пуле осталось 5 + 5');
+    a.eq(res.settlement.friends.length, 2);
+    a.eq(res.settlement.creators.fee, 1, 'комиссия только с двух оставшихся ставок');
+    a.eq(w.balance, 80 + 20 + 10 - 1, '20 назад и 10 × 0,9 сверху: ушедший не платит');
+    a.deep(res.round.left, [{ id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5 }]);
+    a.eq(w.withdraw(ch.id, 'peer:f2'), null, 'после расчёта раунд не трогаем');
+    a.eq(res.settlement.friends.some((f) => f.id === 'peer:f1'), false);
+  });
+
+  t.test('кошелёк: друг ушёл после финиша игрока, до итогов, тоже выходит; при отмене возврат без него', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ stake: 10, bets: [bet('peer:f1', 5), bet('bot-1', 5, { bot: true })] });
+    w.hold(ch);
+    w.end(finished(ch, false));
+    a.ok(w.withdraw(ch.id, 'peer:f1'), 'статус ended: ещё можно');
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.pool, 5);
+    a.eq(res.settlement.friends.length, 1);
+    a.eq(w.balance, 90, 'проиграл 10');
+    const c2 = challenge({ stake: 10, bets: [bet('peer:f1', 5), bet('bot-1', 5, { bot: true })] });
+    w.hold(c2);
+    w.withdraw(c2.id, 'peer:f1');
+    const back = w.refund('camera', c2.id);
+    a.eq(back.settlement.friends.length, 1, 'в возврате только оставшиеся');
+    a.eq(w.balance, 90);
   });
 
   t.test('кошелёк: обычная ставка не урезается', (a) => {
@@ -655,6 +780,23 @@ function screensTests(t) {
   t.test('итоги: ошибки чаще выше, нулевые не показываем', (a) => {
     const items = faultItems([{ code: 'a', text: 'наклон спины вперёд', count: 1 }, { code: 'b', text: 'недостаточная глубина', count: 3 }, { code: 'c', text: 'x', count: 0 }]);
     a.deep(items.map((i) => i.text), ['3 × недостаточная глубина', '1 × наклон спины вперёд']);
+  });
+
+  t.test('итоги: друг, ушедший до финиша, строкой «ушёл, ставка возвращена» с нулём', (a) => {
+    const st = settle({ stake: 10, bets: [bet('bot-1', 5, { bot: true })], success: true });
+    const left = [{ id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5 }];
+    const rows = ledgerRows(st, { avatar: '🏋️', left });
+    a.deep(rows.map((r) => r.name), ['Ты', 'bot-1', 'Лиса', 'Приложение']);
+    const gone = rows[2];
+    a.eq(gone.detail, RESULT_TEXT.left);
+    a.eq(gone.detail, 'ушёл, ставка возвращена');
+    a.eq(gone.delta, 0);
+    a.eq(gone.kind, 'friend');
+    const solo = settle({ stake: 10, bets: [], success: false });
+    const soloRows = ledgerRows(solo, { left });
+    a.deep(soloRows.map((r) => r.name), ['Ты', 'Лиса'], 'все ушли: ставок в пуле нет, но уход виден');
+    a.deep(ledgerRows(st, {}).map((r) => r.name), ['Ты', 'bot-1', 'Приложение'], 'без ушедших как раньше');
+    a.ok(!/[—–]/.test(RESULT_TEXT.left));
   });
 
   t.test('итоги: строка под заголовком', (a) => {
