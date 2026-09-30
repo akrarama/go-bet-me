@@ -2,8 +2,12 @@
 //
 // Слушает события шины от src/friends/peer.js (блок 3), подписка живёт с загрузки страницы,
 // поэтому экран LOBBY видит ссылку, даже если она пришла до его открытия или он открыт повторно:
-//   peer:ready {id, url}                 ссылка для друга есть → в LOBBY карточка приглашения
-//   peer:error {error}                   облако недоступно → карточки нет, всё как в P0 (боты)
+//   peer:pending {}                      PeerJS грузится → карточка «Готовлю ссылку для друга»
+//   peer:ready {id, url, friends}        ссылка для друга есть → карточка с QR. Приходит и на каждом входе
+//                                        в LOBBY. friends: число подключённых или список {id, name, avatar}
+//                                        (список сверяет счётчик, число игнорируем: друзей ведут join и leave)
+//   peer:error {error, recoverable}      облако недоступно → карточки нет, всё как в P0 (боты). recoverable:
+//                                        связь с облаком мигнула, подключённые друзья остаются, вернётся peer:ready
 //   friend:join {id, name, avatar}       друг подключился: «Смотрят: N» растёт
 //   friend:leave {id}                    друг ушёл: N падает
 // Ставка друга приходит обычным событием bet (bet.bot = false, bet.id = 'peer:<id>'): betRow() готовит для
@@ -48,11 +52,14 @@ export function shortLink(url, keep = 8) {
 
 /**
  * Хранилище: есть ли ссылка и кто из друзей на связи.
- * store.on / .url / .id / .count / .friends; store.subscribe(fn) → отписка; fn(store) на каждое изменение.
- * ready({id, url}) · fail() · join({id, name, avatar}) · leave({id}).
+ * store.on (карточку показывать) / .pending (ссылка готовится) / .url / .id / .count / .friends;
+ * store.subscribe(fn) → отписка; fn(store) на каждое изменение.
+ * wait() · ready({id, url, friends}) · fail({recoverable}) · join({id, name, avatar}) · leave({id}).
  */
 export function createInvite() {
-  let link = null; // { id, url }
+  let phase = 'off'; // off | pending | ready
+  let link = null; // { id, url }, пока ready
+  let hostId = null; // id последнего хоста: новый id = друзья прежнего отвалились
   const friends = new Map(); // id → { id, name, avatar }
   const subs = new Set();
   const notify = () => {
@@ -67,7 +74,10 @@ export function createInvite() {
 
   const store = {
     get on() {
-      return link !== null;
+      return phase !== 'off';
+    },
+    get pending() {
+      return phase === 'pending';
     },
     get url() {
       return link ? link.url : null;
@@ -82,22 +92,49 @@ export function createInvite() {
       return [...friends.values()];
     },
 
-    /** Пришла ссылка. Без нормального http(s) адреса игнорируем. Новый id = новый хост: прежние друзья отвалились. */
+    /** peer:pending: ссылка готовится. Если карточка уже есть (ссылка готова), ничего не меняем. */
+    wait() {
+      if (phase !== 'off') return;
+      phase = 'pending';
+      notify();
+    },
+
+    /**
+     * Пришла ссылка (и снова на каждом входе в LOBBY). Без нормального http(s) адреса игнорируем.
+     * Новый id = новый хост: прежние друзья отвалились. friends списком сверяет счётчик, числом не трогает.
+     */
     ready(payload) {
       const url = cleanUrl(payload?.url);
       if (!url) return;
       const id = String(payload?.id ?? url);
-      if (link && link.id !== id) friends.clear();
+      if (hostId !== null && hostId !== id) friends.clear();
+      hostId = id;
       link = { id, url };
+      phase = 'ready';
+      if (Array.isArray(payload.friends)) {
+        friends.clear();
+        for (const f of payload.friends) {
+          const o = typeof f === 'string' ? { id: f } : f;
+          if (o?.id == null) continue;
+          friends.set(String(o.id), { id: String(o.id), name: cleanName(o.name), avatar: cleanAvatar(o.avatar) });
+        }
+      }
       notify();
     },
 
-    /** peer:error: карточки нет, друзей тоже. */
-    fail() {
-      if (!link && !friends.size) return;
+    /**
+     * peer:error: карточки нет. Обычно и друзей тоже (соединения закрыты). recoverable: связь с облаком
+     * мигнула, друзья на месте и вернутся вместе с peer:ready.
+     */
+    fail({ recoverable = false } = {}) {
+      const had = phase !== 'off' || (!recoverable && friends.size > 0);
+      phase = 'off';
       link = null;
-      friends.clear();
-      notify();
+      if (!recoverable) {
+        friends.clear();
+        hostId = null;
+      }
+      if (had) notify();
     },
 
     join(payload) {
@@ -123,8 +160,9 @@ export function createInvite() {
 /** Подписывает хранилище на события шины. → функция «отписать». */
 export function attachInvite(eventBus, store) {
   const offs = [
+    eventBus.on('peer:pending', () => store.wait()),
     eventBus.on('peer:ready', (p) => store.ready(p)),
-    eventBus.on('peer:error', () => store.fail()),
+    eventBus.on('peer:error', (p) => store.fail(p ?? {})),
     eventBus.on('friend:join', (p) => store.join(p)),
     eventBus.on('friend:leave', (p) => store.leave(p)),
   ];
