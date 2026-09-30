@@ -6,7 +6,7 @@
 // Сообщения хоста (CLAUDE.md, раздел 14.2): поле t = вид: lobby, bet:ok, bet:full, start, count, fault, rejected, end, void.
 // Камеры и моделей экран не трогает (model: 'none': с null app.go взял бы модель жестов). Стили: styles/friend.css.
 // Состояние чистое (reduce, betOptions, lobbyView, resultView ...): тесты идут в jsc, DOM только в enter и ниже.
-// Без peer.js в ?debug=1 работает заглушка: клавиша f следующий шаг раунда, g ошибка игрока.
+// Заглушка вместо игрока: ?debug=1&join=demo (или нет peer.js в ?debug=1); клавиша f следующий шаг раунда, g ошибка игрока.
 
 import { CHALLENGES, MONEY, STAKES } from '../config.js';
 import { esc, formatTime } from '../ui.js';
@@ -392,7 +392,7 @@ export function lostView(S, now) {
   const gone = now - S.lostAt;
   if (gone < LOST_SHOW_MS) return null;
   if (gone < LOST_GIVEUP_MS) {
-    return { title: 'Связь с игроком пропала', text: 'Пробуем вернуться. Если игрок закрыл страницу, раунд не продолжится', reload: false };
+    return { title: 'Связь с игроком пропала', text: 'Ждём игрока. Если он закрыл страницу, раунд не продолжится', reload: false };
   }
   return { title: 'Игрок не вернулся', text: 'Обнови страницу: ставка вернётся, и можно зайти снова', reload: true };
 }
@@ -436,7 +436,7 @@ const who = (guest) => ({ name: guest?.name || 'Ты', avatar: guest?.avatar || 
 
 const skeleton = () => `
   <div class="friend" data-phase="connecting" data-link="connecting">
-    <div class="friend__link" data-link-banner hidden>Связь с игроком пропала, пробую вернуться</div>
+    <div class="friend__link" data-link-banner hidden>Связь с игроком пропала. Обнови страницу, чтобы зайти снова</div>
 
     <section class="friend__view friend__view--connect">
       <div class="panel panel--narrow friend__card friend__card--center">
@@ -617,6 +617,7 @@ function paintLost(r, now) {
   const v = lostView(r.S, now);
   els.lost.hidden = !v;
   if (!v) return;
+  els.banner.hidden = true;
   els.lostTitle.textContent = v.title;
   els.lostText.textContent = v.text;
   els.reload.hidden = !v.reload;
@@ -681,7 +682,9 @@ function paint(r) {
   const { els, S } = r;
   els.friend.dataset.phase = S.phase;
   els.friend.dataset.link = S.link;
-  els.banner.hidden = !(S.link !== 'open' && S.phase !== 'connecting' && S.phase !== 'error');
+  // плашка «связь пропала»; когда посреди эфира уже показана карточка, плашка не нужна
+  const lostCard = S.phase === 'live' && lostView(S, performance.now()) != null;
+  els.banner.hidden = !(S.link !== 'open' && S.phase !== 'connecting' && S.phase !== 'error') || lostCard;
   if (S.phase === 'connecting' || S.phase === 'error') paintConnect(r);
   else if (S.phase === 'lobby') paintLobby(r);
   else if (S.phase === 'live') paintLive(r);
@@ -827,6 +830,8 @@ async function attach(r, guest) {
 
 async function makeGuest(ctx, params) {
   if (params.guest) return params.guest;
+  // ?debug=1&join=demo: посмотреть экран без настоящего игрока (заглушка играет хоста)
+  if (ctx.debug.enabled && String(params.hostId ?? '').startsWith('demo')) return createStubGuest(ctx);
   try {
     const mod = await import('../friends/peer.js');
     if (typeof mod.createGuest === 'function') return mod.createGuest({ hostId: params.hostId, bus: ctx.bus });
