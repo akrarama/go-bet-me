@@ -3,20 +3,28 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, MONEY } from './config.js';
 const START_BALANCE = MONEY.startBalance;
 const configured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 const ACCOUNT_TIMEOUT_MS = 8000;
+// Библиотека входа начинает качаться сразу при открытии страницы, а не когда дошли до формы.
+const supabaseLib = configured ? import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm') : null;
+supabaseLib?.catch(() => {});
 
 function withTimeout(promise, ms = ACCOUNT_TIMEOUT_MS) {
   return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Превышено время ожидания')), ms))]);
 }
 
-/** Username/password gate backed by Supabase Auth's email/password provider. */
+/**
+ * Username/password gate backed by Supabase Auth's email/password provider.
+ * Промис завершается ТОЛЬКО когда человек вошёл (false) или дальше идти нельзя (true).
+ */
 export async function requireAccount() {
   if (!configured) {
     showSetupMessage();
     return true;
   }
+  let finish;
+  const authenticated = new Promise((resolve) => { finish = () => resolve(false); });
   let createClient;
   try {
-    ({ createClient } = await withTimeout(import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')));
+    ({ createClient } = await withTimeout(supabaseLib));
   } catch {
     showAccountLoadError();
     return true;
@@ -67,8 +75,17 @@ export async function requireAccount() {
 
   const startSession = async (user, newUsername = null) => {
     if (!user) return render('Не удалось определить аккаунт. Войди ещё раз.');
-    let { data, error } = await withTimeout(supabase.from('profiles').select('credits, nickname').eq('id', user.id).maybeSingle());
-    if (error) return render(`Ошибка базы: ${error.message}`);
+    let data = null;
+    if (newUsername) {
+      // Только что зарегистрировались: профиля ещё нет, SELECT не нужен.
+      const fresh = await withTimeout(supabase.from('profiles').insert({ id: user.id, nickname: newUsername, credits: START_BALANCE }).select('credits, nickname').single());
+      if (!fresh.error) data = fresh.data;
+    }
+    if (!data) {
+      const found = await withTimeout(supabase.from('profiles').select('credits, nickname').eq('id', user.id).maybeSingle());
+      if (found.error) return render(`Ошибка базы: ${found.error.message}`);
+      data = found.data;
+    }
     if (!data) {
       const created = await withTimeout(supabase.from('profiles').insert({ id: user.id, nickname: newUsername, credits: START_BALANCE }).select('credits, nickname').single());
       if (created.error) return render(`Не удалось создать профиль: ${created.error.message}`);
@@ -104,6 +121,7 @@ export async function requireAccount() {
       }).catch((err) => console.warn('[credits sync]', err));
       return persistQueue;
     };
+    finish(); // только теперь main.js продолжает запуск: камера, экраны
   };
 
   try {
@@ -114,7 +132,7 @@ export async function requireAccount() {
   } catch (err) {
     render(`Supabase отвечает слишком долго. Проверь интернет и обнови страницу. (${err.message})`);
   }
-  return !gate.hidden;
+  return authenticated;
 }
 
 function showAccountLoadError() {
