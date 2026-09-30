@@ -1,7 +1,8 @@
 // LOBBY: друзья ставят против (P0: боты), пул. Старт: рука над головой 1 с → LIVENESS. 👎 → SETUP.
 // Запасной старт, если рука не ловится: dwell-кнопка «Старт» (палец-курсор, 1 с).
 // P1: карточка приглашения друга (QR, ссылка, «Смотрят: N») по событию peer:ready, см. ui/invite.js.
-// Нет peer:ready или пришёл peer:error → карточки нет, всё как в P0.
+// peer:pending → карточка «Готовлю ссылку». Нет peer:ready или пришёл peer:error → карточки нет, всё как в P0.
+// bet:cancel {bet, challenge}: друг ушёл из LOBBY, его строка уходит из списка, пул пересчитывается.
 // Владелец: блок 2 (Жесты). Ставки даёт блок 3: bots.join(challenge) и peer.js → событие bet.
 // Модели ['gesture', 'pose'] по очереди: палец-курсор и «рука вверх» одновременно.
 // Прогресс удержания руки (gestures.bestArm) видно дважды: большое кольцо старта и кольцо у запястья.
@@ -30,11 +31,12 @@ let simCtx = null; // экран открыт: для debug-имитации д�
 
 // ?debug=1, клавиша k: пока peer.js нет (или чтобы не искать второй телефон), имитация друга по ссылке. Шаги по кругу.
 const SIM = [
-  ['ссылка готова (peer:ready)', () => bus.emit('peer:ready', { id: 'demo1234', url: 'https://akrarama.github.io/go-bet-me/?join=demo1234' })],
+  ['готовлю ссылку (peer:pending)', () => bus.emit('peer:pending', {})],
+  ['ссылка готова (peer:ready)', () => bus.emit('peer:ready', { id: 'demo1234', url: 'https://akrarama.github.io/go-bet-me/?join=demo1234', friends: 0 })],
   ['друг Тимур зашёл', () => bus.emit('friend:join', { id: 'demo-a', name: 'Тимур', avatar: '🧑' })],
   ['Тимур поставил 5', simBet],
   ['друг Аня зашла', () => bus.emit('friend:join', { id: 'demo-b', name: 'Аня', avatar: '👩' })],
-  ['Тимур ушёл', () => bus.emit('friend:leave', { id: 'demo-a' })],
+  ['Тимур ушёл, ставка снята (bet:cancel)', simLeave],
   ['облако упало (peer:error)', () => bus.emit('peer:error', { error: 'debug' })],
 ];
 let simStep = 0;
@@ -46,6 +48,15 @@ function simBet() {
     if (r.bet) bus.emit('bet', { bet: r.bet, challenge: ch });
     else simCtx?.ui.toast(`Ставка друга не принята: ${r.status}`);
   });
+}
+function simLeave() {
+  const ch = simCtx?.app.challenge;
+  const i = ch?.bets?.findIndex((b) => b.id === 'peer:demo-a') ?? -1;
+  if (i >= 0) {
+    const [bet] = ch.bets.splice(i, 1);
+    bus.emit('bet:cancel', { bet, challenge: ch });
+  }
+  bus.emit('friend:leave', { id: 'demo-a' });
 }
 debug.key('k', () => {
   const [label, run] = SIM[simStep % SIM.length];
@@ -131,7 +142,7 @@ export default {
           <div class="lobby-start__label" data-label>Подними руку над головой</div>
           <div class="lobby-start__sub">и подержи ${holdSec} ${plural(holdSec, 'секунду', 'секунды', 'секунд')}</div>
           <div class="lobby-back"><span aria-hidden="true">👎</span> Назад к настройкам</div>
-          <button class="btn btn--primary lobby-go" data-dwell data-action="go">Старт</button>
+          <button class="btn lobby-go" data-dwell data-action="go">Старт</button>
           <div class="lobby-alt">Рука не ловится? Наведи палец на кнопку</div>
         </section>
         <section class="panel lobby-invite" data-invite hidden></section>
@@ -139,7 +150,7 @@ export default {
 
     const q = (sel) => ctx.root.querySelector(sel);
     const v = (view = {
-      going: false, p: -1, charging: false, coach: null, seen: new Set(), inviteUrl: null, offInvite: null,
+      going: false, p: -1, charging: false, coach: null, seen: new Set(), inviteKey: null, offInvite: null,
       lobby: q('.lobby'), invite: q('[data-invite]'),
       bets: q('[data-bets]'), empty: q('[data-empty]'), pool: q('[data-pool]'), full: q('[data-full]'), meter: q('[data-meter]'),
       start: q('[data-start]'), gauge: q('[data-gauge]'), label: q('[data-label]'),
@@ -153,7 +164,7 @@ export default {
       const r = betRow(bet);
       v.bets.insertAdjacentHTML(
         'beforeend',
-        `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}" style="--i: ${i}">
+        `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}" data-bet="${esc(r.id)}" style="--i: ${i}">
           <span class="lobby-bet__avatar" aria-hidden="true">${esc(r.avatar)}</span>
           <span class="lobby-bet__who"><span class="lobby-bet__name">${esc(r.name)}</span>${r.link ? '<span class="lobby-bet__tag">по ссылке</span>' : ''}</span>
           <span class="lobby-bet__amount">${r.amount} кр.</span>
@@ -172,6 +183,17 @@ export default {
     ctx.on('bet', ({ bet, challenge }) => {
       if (challenge?.id !== ch.id) return;
       addBet(bet);
+      renderPool();
+    });
+    // друг ушёл до Старта: money уже убрал его ставку из challenge.bets, здесь строка и пул
+    ctx.on('bet:cancel', ({ bet, challenge }) => {
+      if (challenge?.id !== ch.id || !bet) return;
+      v.seen.delete(bet.id);
+      const row = [...v.bets.children].find((li) => li.dataset.bet === String(bet.id));
+      if (row) {
+        row.classList.add('is-leaving');
+        ctx.timeout(() => row.remove(), 260);
+      }
       renderPool();
     });
     bots.join(ch);
@@ -198,29 +220,40 @@ export default {
     const renderInvite = () => {
       if (view !== v) return;
       if (!invite.on) {
-        v.inviteUrl = null;
+        v.inviteKey = null;
         v.invite.hidden = true;
         v.invite.innerHTML = '';
         v.invite.classList.remove('is-noqr');
         v.lobby.classList.remove('has-invite');
         return;
       }
-      if (v.inviteUrl !== invite.url) {
-        const url = (v.inviteUrl = invite.url);
+      const key = invite.pending ? 'pending' : invite.url;
+      if (v.inviteKey !== key) {
+        v.inviteKey = key;
         v.invite.classList.remove('is-noqr');
-        v.invite.innerHTML = `
-          <div class="invite-qr" data-qr></div>
-          <div class="invite-body">
-            <h3 class="lobby-title">Позови друга</h3>
-            <p class="invite-text">Друг наводит камеру на QR и ставит против</p>
-            <p class="invite-link">${esc(shortLink(url))}</p>
-            <p class="invite-watch" data-watch aria-live="polite"></p>
-          </div>`;
-        const hit = qrCached(url);
-        if (hit) setQr(hit);
-        else qrFor(url).then((svg) => view === v && v.inviteUrl === url && setQr(svg));
+        if (invite.pending) {
+          v.invite.innerHTML = `
+            <div class="invite-qr" data-qr></div>
+            <div class="invite-body">
+              <h3 class="lobby-title">Позови друга</h3>
+              <p class="invite-text">Готовлю ссылку для друга<span class="lobby-dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+            </div>`;
+        } else {
+          const url = key;
+          v.invite.innerHTML = `
+            <div class="invite-qr" data-qr></div>
+            <div class="invite-body">
+              <h3 class="lobby-title">Позови друга</h3>
+              <p class="invite-text">Друг наводит камеру на QR и ставит против</p>
+              <p class="invite-link">${esc(shortLink(url))}</p>
+              <p class="invite-watch" data-watch aria-live="polite"></p>
+            </div>`;
+          const hit = qrCached(url);
+          if (hit) setQr(hit);
+          else qrFor(url).then((svg) => view === v && v.inviteKey === url && setQr(svg));
+        }
       }
-      renderWatch();
+      if (!invite.pending) renderWatch();
       v.invite.hidden = false;
       v.lobby.classList.add('has-invite');
     };

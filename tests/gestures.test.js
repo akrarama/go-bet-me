@@ -919,8 +919,11 @@ export default (t) => {
     };
     const inv = createInvite();
     const off = attachInvite(fakeBus, inv);
-    a.deep([...handlers.keys()].sort(), ['friend:join', 'friend:leave', 'peer:error', 'peer:ready']);
+    a.deep([...handlers.keys()].sort(), ['friend:join', 'friend:leave', 'peer:error', 'peer:pending', 'peer:ready']);
+    handlers.get('peer:pending')({});
+    a.eq(inv.pending, true);
     handlers.get('peer:ready')({ id: 'h', url: 'https://x.io/?join=h' });
+    a.eq(inv.pending, false);
     handlers.get('friend:join')({ id: 'a', name: 'Тимур', avatar: '🧑' });
     a.eq(inv.on, true);
     a.eq(inv.count, 1);
@@ -930,6 +933,58 @@ export default (t) => {
     a.eq(inv.on, false);
     off();
     a.eq(handlers.size, 0);
+  });
+
+  t.test('приглашение: peer:pending показывает «готовлю ссылку», ready и error её заканчивают', (a) => {
+    const inv = createInvite();
+    inv.wait();
+    a.eq(inv.on, true);
+    a.eq(inv.pending, true);
+    a.eq(inv.url, null);
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h' });
+    a.eq(inv.pending, false);
+    a.eq(inv.on, true);
+    inv.wait();
+    a.eq(inv.pending, false, 'ссылка уже готова: pending не возвращает «готовлю»');
+    inv.fail();
+    inv.wait();
+    inv.fail();
+    a.eq(inv.on, false, 'ошибка во время загрузки убирает карточку');
+    a.eq(inv.pending, false);
+  });
+
+  t.test('приглашение: friends в peer:ready: список сверяет счётчик, число его не трогает', (a) => {
+    const inv = createInvite();
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h' });
+    inv.join({ id: 'a', name: 'Тимур' });
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h', friends: 1 });
+    a.eq(inv.count, 1, 'число: друзей ведут join и leave');
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h', friends: [{ id: 'b', name: 'Аня', avatar: '👩' }, 'c', { name: 'без id' }, null] });
+    a.deep(inv.friends.map((f) => f.id), ['b', 'c'], 'список заменил прежних, записи без id пропущены');
+    a.eq(inv.friends[0].name, 'Аня');
+    a.eq(inv.friends[1].name, 'Друг', 'у строки-id имя по умолчанию');
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h', friends: [] });
+    a.eq(inv.count, 0, 'пустой список: никого нет');
+  });
+
+  t.test('приглашение: peer:error с recoverable оставляет друзей до возврата ссылки', (a) => {
+    const inv = createInvite();
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h' });
+    inv.join({ id: 'a' });
+    inv.fail({ recoverable: true });
+    a.eq(inv.on, false, 'карточки нет, пока нет связи с облаком');
+    a.eq(inv.count, 1, 'друг на месте');
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h' });
+    a.eq(inv.on, true);
+    a.eq(inv.count, 1, 'тот же хост: друг не потерян');
+    inv.fail({ recoverable: true });
+    inv.ready({ id: 'h2', url: 'https://x.io/?join=h2' });
+    a.eq(inv.count, 0, 'после мигания вернулся под другим id: друзья прежнего отвалились');
+    inv.join({ id: 'b' });
+    inv.fail({ recoverable: false });
+    a.eq(inv.count, 0, 'обычная ошибка: друзей нет');
+    inv.ready({ id: 'h', url: 'https://x.io/?join=h' });
+    a.eq(inv.count, 0);
   });
 
   t.test('ставки: друг по ссылке отличается от бота, чужие данные приводятся к безопасному виду', (a) => {
