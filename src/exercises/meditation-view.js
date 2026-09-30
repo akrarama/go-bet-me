@@ -51,7 +51,7 @@ const IRIS_FROM = 478; // радужки есть только в модели �
 const TONES = { ok: 'accent', warn: 'warn', danger: 'danger', neutral: 'text' };
 const RANK = { ok: 0, neutral: 1, warn: 2, danger: 3 };
 const STEADY = new Set(['main', 'lost', 'two']); // между ними переход через HOLD_MS
-const EYES_TEXT = { ok: 'Глаза закрыты', warn: 'Глаза открыты', danger: 'Глаза открыты', neutral: 'Ищу глаза' };
+const EYES_TEXT = { ok: 'Глаза закрыты', warn: 'Глаза открыты', danger: 'Глаза открыты', neutral: 'Глаз не видно' };
 const HEAD_TEXT = { ok: 'Голова неподвижна', warn: 'Голова двигается', danger: 'Голова двигается', neutral: 'Голова неподвижна' };
 const STRANGER = 'Второй человек';
 const FALLBACK = { accent: '#d4ff3a', warn: '#ffb020', danger: '#ff4d4f', text: '#f5f5f7', bg: '#0a0a0c' };
@@ -414,6 +414,29 @@ export function createView() {
     g.fillRect(0, 0, W, H);
   }
 
+  /** Тёмная мягкая подложка снаружи контура: на светлом фоне (белая стена, окно) свет ореола иначе не виден; на тёмном её не видно. */
+  function backing(g, W, H, e) {
+    if (e < 0.01) return;
+    const s = me;
+    save(g);
+    g.beginPath();
+    g.rect(0, 0, W, H);
+    oval(g, s);
+    g.clip('evenodd');
+    const q = 1 + (s.rh / s.rw - 1) * 0.7;
+    const R = s.rw * 2.1;
+    g.translate(s.cx + s.sin * s.rh * 0.1, s.cy - s.cos * s.rh * 0.1);
+    g.rotate(s.roll);
+    g.scale(1, q);
+    const grad = g.createRadialGradient(0, 0, s.rw * 0.8, 0, 0, R);
+    grad.addColorStop(0, `rgba(0, 0, 0, ${Math.round(0.4 * e * 1000) / 1000})`);
+    grad.addColorStop(0.5, `rgba(0, 0, 0, ${Math.round(0.18 * e * 1000) / 1000})`);
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    g.fillStyle = grad;
+    g.fillRect(-R, -R, 2 * R, 2 * R);
+    restore(g);
+  }
+
   /** Ореол за головой: свет только снаружи контура (клип evenodd), лицо не заливаем. */
   function aura(g, W, H, e, b) {
     if (e < 0.01) return;
@@ -462,8 +485,8 @@ export function createView() {
     const c = col.tone;
     g.beginPath();
     oval(g, s);
-    g.lineWidth = lw + 2.5;
-    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.22 * a * 1000) / 1000})`;
+    g.lineWidth = lw + 4;
+    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.5 * a * 1000) / 1000})`; // тёмная обводка: на белой стене лайм без неё не виден
     g.stroke();
     const ux = s.sin * s.rh;
     const uy = -s.cos * s.rh;
@@ -489,6 +512,9 @@ export function createView() {
       const h = (traceP * L) / 2;
       g.setLineDash([h, Math.max(0, L - 2 * h), h, L]);
     }
+    g.lineWidth = lw * 1.2 + 4;
+    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.45 * a * 1000) / 1000})`;
+    g.stroke();
     g.lineWidth = lw * 3.4;
     g.strokeStyle = rgba(pal.accent, 0.16 * a);
     g.stroke();
@@ -546,8 +572,8 @@ export function createView() {
     }
     g.beginPath();
     spline(g, UX, UY, LID, true);
-    g.lineWidth = lw + 2;
-    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.2 * a * 1000) / 1000})`;
+    g.lineWidth = lw + 3.5;
+    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.5 * a * 1000) / 1000})`;
     g.stroke();
     if (glow > 0.5) {
       g.shadowColor = rgba(c, 0.85 * a);
@@ -583,6 +609,9 @@ export function createView() {
     g.beginPath();
     oval(g, me);
     g.setLineDash([lw * 1.2, lw * 3.2]);
+    g.lineWidth = lw + 3;
+    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.35 * lv.lost * 1000) / 1000})`;
+    g.stroke();
     g.lineWidth = lw;
     g.strokeStyle = rgba(col.tone, lv.lost * (0.38 + 0.32 * pulse));
     g.stroke();
@@ -601,8 +630,8 @@ export function createView() {
     oval(g, s);
     g.fillStyle = rgba(c, 0.1 * a);
     g.fill();
-    g.lineWidth = lw + 2.5;
-    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.22 * a * 1000) / 1000})`;
+    g.lineWidth = lw + 4;
+    g.strokeStyle = `rgba(0, 0, 0, ${Math.round(0.4 * a * 1000) / 1000})`;
     g.stroke();
     g.setLineDash([lw * 2.6, lw * 2]);
     g.shadowColor = rgba(c, 0.8 * a);
@@ -888,7 +917,10 @@ export function createView() {
         g.lineJoin = 'round';
         vignette(g, W, H, b);
         if (me.ok) {
-          if (A > 0.01) aura(g, W, H, lv.energy * A, b);
+          if (A > 0.01) {
+            backing(g, W, H, A * lv.contour);
+            aura(g, W, H, lv.energy * A, b);
+          }
           ghosts(g, t, A * lv.contour, lw);
           lostGhost(g, t, lw);
           if (A > 0.01) {

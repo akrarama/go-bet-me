@@ -172,7 +172,18 @@
 .friend__fault[data-kind="rejected"] { border-color: var(--line-strong); box-shadow: var(--shadow); color: var(--muted); }
 @keyframes friend-fault-in { from { opacity: 0; transform: translateY(-10px) scale(0.94); } }
 
-.friend__counter { position: absolute; left: var(--gutter); bottom: calc(var(--safe-b) + 108px); }
+.friend__counter { position: absolute; left: var(--gutter); bottom: calc(var(--safe-b) + 108px); isolation: isolate; }
+/* Светлое видео (белая стена, окно): мягкая тёмная подложка под счётчиком, тени у цифр и подписи */
+.friend__counter::before {
+  content: ''; position: absolute; z-index: -1; inset: -52px -64px -26px -44px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.66) 0%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0) 100%);
+}
+.friend__counter .hud__label {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; margin-bottom: 8px; border-radius: var(--r-pill);
+  background: var(--surface-strong); border: 1px solid var(--line); color: var(--text); font-size: 15px;
+}
+.friend__counter .counter { text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6), 0 6px 36px rgba(0, 0, 0, 0.6); }
+.friend__counter .counter__target { color: rgba(245, 245, 247, 0.88); }
 
 /* Игрок пропал посреди эфира: карточка поверх видео, тапы по реакциям не проходят */
 .friend__lost {
