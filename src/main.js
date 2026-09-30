@@ -140,10 +140,7 @@ function onFrame(ctx, frame) {
   else draw.auto(frame, { highlight: feedback.highlight });
 }
 
-const mark = (label) => console.log(`[время] ${label}: ${Math.round(performance.now())} мс от открытия страницы`);
-
 async function boot() {
-  mark('boot начался');
   ui.loader.show('Проверяю аккаунт');
   // Модель жестов (несколько МБ + wasm) не зависит от входа: качаем её, пока человек вводит логин и пароль.
   // Тогда после регистрации остаётся только включить камеру.
@@ -152,7 +149,6 @@ async function boot() {
     vision.use('gesture');
   }
   if (!JOIN_ID && await requireAccount()) return;
-  mark('вход завершён, стартуем камеру');
   const ctx = makeContext();
   app.init(ctx);
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);
@@ -182,7 +178,6 @@ async function boot() {
     offProgress();
     return ui.fatal(...cameraError(err));
   }
-  mark('камера готова');
   $('#stage').classList.toggle('is-mirrored', camera.mirror);
   draw.resize();
   try {
@@ -194,7 +189,6 @@ async function boot() {
     offProgress();
   }
 
-  mark('модель жестов готова');
   gestures.start(ctx);
   dwell.start(ctx);
   wallet.init(ctx);
@@ -203,7 +197,6 @@ async function boot() {
   debugKeys();
 
   ui.loader.hide();
-  mark('экран IDLE показан');
   app.go(DEBUG_STATE && SCREENS[DEBUG_STATE] ? DEBUG_STATE : 'IDLE');
 }
 
