@@ -156,6 +156,10 @@ export default {
       start: q('[data-start]'), gauge: q('[data-gauge]'), label: q('[data-label]'),
     });
 
+    // Возврат из проваленной проверки: то, что уже было (ставки, «пул полон», карточка приглашения), стоит на месте
+    // сразу, без повторного «въезда» и хлопка «пул полон». Новое, что придёт позже, появляется с анимацией.
+    let still = failed;
+
     // Ставки: уже сделанные (вернулись после проверки) и новые по событию bet, без повторов.
     // Ставка друга по ссылке (bet.bot = false) в том же списке, что боты, с меткой «по ссылке».
     const addBet = (bet, i = 0) => {
@@ -164,7 +168,7 @@ export default {
       const r = betRow(bet);
       v.bets.insertAdjacentHTML(
         'beforeend',
-        `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}" data-bet="${esc(r.id)}" style="--i: ${i}">
+        `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}${still ? ' is-still' : ''}" data-bet="${esc(r.id)}" style="--i: ${i}">
           <span class="lobby-bet__avatar" aria-hidden="true">${esc(r.avatar)}</span>
           <span class="lobby-bet__who"><span class="lobby-bet__name">${esc(r.name)}</span>${r.link ? '<span class="lobby-bet__tag">по ссылке</span>' : ''}</span>
           <span class="lobby-bet__amount">${r.amount} кр.</span>
@@ -175,7 +179,10 @@ export default {
       const pool = ch.bets.reduce((s, b) => s + b.amount, 0);
       v.pool.innerHTML = `Против: <b>${pool}</b> из ${ch.stake} кр.`;
       v.meter.style.setProperty('--fill', ch.stake ? Math.min(1, pool / ch.stake) : 0);
-      v.full.hidden = pool < ch.stake;
+      const full = pool >= ch.stake;
+      if (full && v.full.hidden && still) v.full.classList.add('is-still'); // «пул полон» уже был до проверки
+      v.full.hidden = !full;
+      if (!full) v.full.classList.remove('is-still'); // станет полным снова: хлопок нужен
       v.empty.hidden = v.seen.size > 0;
     };
     ch.bets.forEach((b, i) => addBet(b, i));
@@ -215,7 +222,10 @@ export default {
         .slice(0, GESTURES.invite.faces)
         .map((f) => `<span class="invite-face" title="${esc(f.name)}">${esc(f.avatar)}</span>`)
         .join('');
-      el.innerHTML = `<span class="invite-dot${n ? ' is-live' : ''}" aria-hidden="true"></span><span>Смотрят: <b>${n}</b></span>${faces ? `<span class="invite-faces">${faces}</span>` : ''}`;
+      const html = `<span class="invite-dot${n ? ' is-live' : ''}" aria-hidden="true"></span><span>Смотрят: <b>${n}</b></span>${faces ? `<span class="invite-faces">${faces}</span>` : ''}`;
+      if (el.dataset.html === html) return; // peer:ready приходит на каждом входе: тот же счётчик не перерисовываем
+      el.dataset.html = html;
+      el.innerHTML = html;
     };
     const renderInvite = () => {
       if (view !== v) return;
@@ -223,7 +233,7 @@ export default {
         v.inviteKey = null;
         v.invite.hidden = true;
         v.invite.innerHTML = '';
-        v.invite.classList.remove('is-noqr');
+        v.invite.classList.remove('is-noqr', 'is-still');
         v.lobby.classList.remove('has-invite');
         return;
       }
@@ -254,11 +264,13 @@ export default {
         }
       }
       if (!invite.pending) renderWatch();
+      if (v.invite.hidden && still) v.invite.classList.add('is-still'); // карточка уже была до проверки: без «въезда»
       v.invite.hidden = false;
       v.lobby.classList.add('has-invite');
     };
     v.offInvite = invite.subscribe(renderInvite);
     renderInvite();
+    still = false;
     simCtx = ctx;
 
     // Старт: рука над головой или запасная dwell-кнопка «Старт» (если рука не ловится)
