@@ -1,0 +1,245 @@
+/* Стили блока 4 (Медитация): экран друга FRIEND (screens/friend.js).
+   Токены (цвета, шрифты, радиусы) берём из base.css, свои не заводим. Сначала телефон 390 px, потом десктоп. */
+
+/* Экран занимает всю сцену, что показывать, решает data-phase */
+.screen--friend { display: block; padding: 0; }
+.friend { position: absolute; inset: 0; }
+
+.friend__view { display: none; position: absolute; inset: 0; animation: friend-in 0.45s var(--ease-out) both; }
+.friend[data-phase="connecting"] .friend__view--connect,
+.friend[data-phase="error"] .friend__view--connect,
+.friend[data-phase="lobby"] .friend__view--lobby,
+.friend[data-phase="result"] .friend__view--result,
+.friend[data-phase="void"] .friend__view--result { display: flex; }
+.friend[data-phase="live"] .friend__view--live { display: block; }
+@keyframes friend-in { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+
+/* Экраны-карточки: по центру, а если карточка выше экрана, она прокручивается */
+.friend__view--connect,
+.friend__view--lobby,
+.friend__view--result {
+  flex-direction: column; align-items: center;
+  padding: calc(var(--safe-t) + 72px) var(--gutter) calc(var(--safe-b) + 24px);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.friend__card { margin: auto 0; width: min(520px, 100%); display: grid; gap: 14px; }
+.friend__card--center { justify-items: center; text-align: center; }
+.friend__card--center .h2 { margin: 0; }
+
+/* Плашка: связь с игроком пропала */
+.friend__link {
+  position: absolute; z-index: 5; top: calc(var(--safe-t) + 64px); left: 50%; transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--gutter)); padding: 8px 14px; border-radius: var(--r-pill);
+  background: var(--surface-strong); border: 1px solid rgba(255, 176, 32, 0.6); color: var(--warn);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  font-weight: 700; font-size: 14px; text-align: center; line-height: 1.3;
+}
+.friend[data-phase="live"] .friend__link { top: calc(var(--safe-t) + 124px); }
+
+/* Кнопка «Повторить» */
+.friend__btn {
+  appearance: none; min-height: 56px; padding: 12px 26px; border-radius: var(--r);
+  border: 1px solid transparent; background: var(--accent); color: var(--accent-ink);
+  font: 800 17px / 1.2 var(--font-ui); cursor: pointer; touch-action: manipulation;
+  transition: transform 0.25s var(--ease-spring);
+}
+.friend__btn:active { transform: scale(0.96); }
+
+/* ─── Лобби ─────────────────────────────────────────────────── */
+
+.friend__me { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+.friend__avatar {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--surface-2); font-size: 20px; line-height: 1;
+}
+.friend__me-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.friend__me-balance { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.friend__eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.friend__eyebrow:empty { display: none; }
+.friend__headline {
+  margin: 0; font-family: var(--font-display); font-weight: 600; font-size: clamp(22px, 6vw, 30px);
+  line-height: 1.15; letter-spacing: -0.02em;
+}
+.friend__facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.friend__facts:empty { display: none; }
+.friend__fact {
+  padding: 6px 12px; border-radius: var(--r-pill); background: var(--surface-2);
+  font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums;
+}
+
+.friend__pool { display: grid; gap: 10px; padding: 14px; border-radius: var(--r); background: var(--surface-2); }
+.friend__pool-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 600; color: var(--muted); }
+.friend__pool-head b { color: var(--text); font-variant-numeric: tabular-nums; }
+.friend__pool-bar { height: 8px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.friend__pool-fill {
+  height: 100%; background: var(--danger); box-shadow: 0 0 12px var(--danger-glow);
+  transform: scaleX(0); transform-origin: left; transition: transform 0.5s var(--ease-out);
+}
+.friend__bets { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.friend__bets:empty { display: none; }
+.friend__chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: var(--r-pill);
+  background: var(--surface-3); font-size: 13px; font-weight: 600;
+}
+.friend__chip i { font-style: normal; font-weight: 800; color: var(--danger); font-variant-numeric: tabular-nums; }
+
+/* Ставки: крупные кнопки под палец */
+.friend__bet-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.friend__bet {
+  appearance: none; min-height: 84px; padding: 10px 6px; border-radius: var(--r);
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--line-strong);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font: inherit; cursor: pointer; touch-action: manipulation;
+  transition: transform 0.25s var(--ease-spring), background 0.2s, border-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+.friend__bet-amount { font-family: var(--font-display); font-weight: 800; font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.friend__bet-unit { font-size: 13px; font-weight: 700; color: var(--muted); }
+.friend__bet:active:not(:disabled) { transform: scale(0.96); background: var(--surface-3); }
+.friend__bet:disabled { cursor: default; }
+.friend__bet:disabled:not(.is-selected):not(.is-pending) { opacity: 0.38; }
+.friend__bet.is-selected { border-color: var(--danger); background: rgba(255, 77, 79, 0.16); box-shadow: 0 0 0 4px var(--danger-glow); }
+.friend__bet.is-selected .friend__bet-unit { color: var(--text); }
+.friend__bet.is-pending { animation: friend-pulse 0.9s ease-in-out infinite; }
+@keyframes friend-pulse { 50% { opacity: 0.55; } }
+
+.friend__notice { margin: 0; padding: 10px 14px; border-radius: var(--r-sm); font-weight: 700; font-size: 15px; line-height: 1.35; }
+.friend__notice[data-tone="ok"] { background: rgba(61, 220, 132, 0.14); color: var(--ok); }
+.friend__notice[data-tone="warn"] { background: rgba(255, 176, 32, 0.14); color: var(--warn); }
+.friend__foot { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; text-align: center; }
+
+/* ─── Эфир: видео игрока, счёт, ошибки, реакции ─────────────── */
+
+.friend__view--live { background: #000; }
+.friend__video-wrap { position: absolute; inset: 0; background: radial-gradient(circle at 50% 40%, #16161b, #000); }
+.friend__video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.friend__video[data-fit="contain"] { object-fit: contain; }
+.friend__novideo {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 0 calc(var(--gutter) + 8px); text-align: center; color: var(--muted);
+}
+.friend__novideo .spinner { margin-bottom: 6px; }
+.friend__nv-icon { font-size: 40px; line-height: 1; }
+.friend__nv-title { font-size: 18px; font-weight: 800; color: var(--text); }
+.friend__nv-text { max-width: 30ch; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.friend__nv-text:empty { display: none; }
+.friend__hud { position: absolute; inset: 0; pointer-events: none; }
+.friend__hud::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0) 26%),
+    linear-gradient(to top, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0) 46%);
+}
+
+.friend__top {
+  position: absolute; left: 0; right: 0; top: calc(var(--safe-t) + 64px);
+  display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 var(--gutter);
+}
+.friend__timer { gap: 10px; transition: color 0.3s; }
+.friend__timer.is-low { color: var(--danger); }
+.friend__timer.is-frozen { color: var(--muted); }
+.friend__timer.is-frozen .friend__dot { animation: none; background: var(--faint); box-shadow: none; }
+.friend__dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 10px var(--danger-glow);
+  animation: friend-live 1.6s ease-in-out infinite;
+}
+@keyframes friend-live { 50% { opacity: 0.35; transform: scale(0.8); } }
+
+.friend__feed {
+  list-style: none; margin: 0; padding: 0 var(--gutter); position: absolute; left: 0; right: 0; top: calc(var(--safe-t) + 124px);
+  display: grid; gap: 8px; justify-items: center;
+}
+.friend__fault {
+  max-width: 100%; padding: 9px 16px; border-radius: var(--r); background: var(--surface-strong);
+  border: 1px solid rgba(255, 77, 79, 0.6); box-shadow: 0 0 0 3px var(--danger-glow), var(--shadow);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  font-weight: 700; font-size: 15px; line-height: 1.3; text-align: center;
+  animation: friend-fault-in 0.45s var(--ease-spring) both;
+}
+.friend__fault[data-kind="rejected"] { border-color: var(--line-strong); box-shadow: var(--shadow); color: var(--muted); }
+@keyframes friend-fault-in { from { opacity: 0; transform: translateY(-10px) scale(0.94); } }
+
+.friend__counter { position: absolute; left: var(--gutter); bottom: calc(var(--safe-b) + 108px); }
+
+/* Игрок пропал посреди эфира: карточка поверх видео, тапы по реакциям не проходят */
+.friend__lost {
+  position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
+  padding: var(--gutter); background: rgba(0, 0, 0, 0.6); pointer-events: auto;
+}
+.friend__lost-card { margin: 0; width: min(420px, 100%); }
+.friend__lost-card .friend__nv-icon { margin-bottom: 2px; }
+
+.friend__reactions {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b) + 20px);
+  display: flex; justify-content: center; gap: 10px; padding: 0 var(--gutter);
+}
+.friend__react {
+  pointer-events: auto; appearance: none; position: relative; flex: 1 1 0; max-width: 150px; min-height: 68px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--surface-strong);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  color: var(--text); font: inherit; cursor: pointer; touch-action: manipulation;
+  transition: transform 0.25s var(--ease-spring), opacity 0.2s;
+}
+.friend__react-emoji { font-size: 26px; line-height: 1; }
+.friend__react-label { font-size: 13px; font-weight: 800; }
+.friend__react:active:not(:disabled) { transform: scale(0.94); }
+.friend__react:disabled { opacity: 0.55; cursor: default; }
+.friend__float { position: absolute; left: 50%; top: 0; font-size: 30px; line-height: 1; pointer-events: none; animation: friend-float 1.6s var(--ease-out) forwards; }
+@keyframes friend-float {
+  from { opacity: 1; transform: translate(-50%, 0) scale(0.8); }
+  to { opacity: 0; transform: translate(-50%, -140px) scale(1.5); }
+}
+
+/* ─── Итог и отмена раунда ──────────────────────────────────── */
+
+.friend__verdict {
+  margin: 0; font-family: var(--font-display); font-weight: 800; font-size: clamp(44px, 14vw, 72px);
+  line-height: 0.95; letter-spacing: -0.04em;
+}
+.friend[data-verdict="true"] .friend__verdict { color: var(--accent); text-shadow: 0 0 40px var(--accent-glow); }
+.friend[data-verdict="false"] .friend__verdict { color: var(--danger); text-shadow: 0 0 40px var(--danger-glow); }
+.friend[data-verdict="void"] .friend__verdict { font-size: clamp(34px, 10vw, 52px); }
+.friend__detail { margin: 0; color: var(--muted); font-weight: 600; font-size: 17px; }
+.friend__delta {
+  font-family: var(--font-display); font-weight: 800; font-size: clamp(36px, 11vw, 56px); line-height: 1;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+}
+.friend__delta[data-tone="up"] { color: var(--accent); }
+.friend__delta[data-tone="down"] { color: var(--danger); }
+.friend__delta[data-tone="zero"] { color: var(--muted); }
+.friend__line { margin: 0; font-weight: 700; font-size: 17px; line-height: 1.35; }
+.friend__wallet {
+  display: flex; justify-content: space-between; align-items: baseline; width: 100%; padding: 12px 16px;
+  border-radius: var(--r-sm); background: var(--surface-2); font-weight: 600; color: var(--muted);
+}
+.friend__wallet b { color: var(--text); font-family: var(--font-display); font-size: 20px; font-variant-numeric: tabular-nums; }
+.friend__wait { margin: 4px 0 0; color: var(--faint); font-weight: 600; font-size: 14px; }
+.friend__dots i {
+  display: inline-block; width: 4px; height: 4px; margin-left: 3px; border-radius: 50%; background: currentColor;
+  animation: friend-dot 1.2s ease-in-out infinite;
+}
+.friend__dots i:nth-child(2) { animation-delay: 0.15s; }
+.friend__dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes friend-dot { 0%, 80%, 100% { opacity: 0.35; transform: none; } 40% { opacity: 1; transform: translateY(-4px); } }
+
+/* ─── Десктоп: ошибки справа, реакции справа снизу ──────────── */
+
+@media (min-width: 720px) {
+  .friend__card { width: min(560px, 100%); }
+  .friend__feed { left: auto; right: var(--gutter); width: min(360px, 34vw); padding: 0; justify-items: end; }
+  .friend__fault { text-align: left; }
+  .friend__reactions { left: auto; right: var(--gutter); padding: 0; gap: 12px; }
+  .friend__react { flex: none; width: 128px; }
+}
+
+/* Слабые телефоны: размытие фона под чипами поверх идущего видео дорогое, а фон и так почти непрозрачный */
+.friend__view--live .chip,
+.friend__view--live .friend__fault,
+.friend__view--live .friend__react { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.friend__view--live .chip { background: var(--surface-strong); }
+
+@media (prefers-reduced-motion: reduce) {
+  .friend__dot, .friend__dots i, .friend__bet.is-pending { animation: none; }
+  .friend__float { display: none; }
+}

@@ -11,7 +11,7 @@
 
 import { REPS } from '../config.js';
 import { angle, belowLine, tiltFromVertical } from '../vision/geometry.js';
-import { createRepController } from './reps.js';
+import { createRepController, PRAISE } from './reps.js';
 
 const deg = (v) => `${Math.round(v)}°`;
 
@@ -98,6 +98,7 @@ export function createController(deps) {
     gate: (m) => (isPlank(m, cfg) ? null : GATES.plank),
     checks: CHECKS,
     rules: [RULES.sag, RULES.pike],
+    praise: [PRAISE[0], PRAISE[1], 'Тело ровное, так держать', PRAISE[2]],
     turn(ev) {
       if (ev.type === 'valley' && ev.phase === 'UP' && ev.angle > cfg.down && ev.angle <= cfg.halfDownFrom) return { rule: RULES.halfDown, value: ev.angle };
       if (ev.type === 'peak' && ev.phase === 'DOWN' && ev.angle >= cfg.halfUpFrom && ev.angle < cfg.up) return { rule: RULES.halfUp, value: ev.angle };

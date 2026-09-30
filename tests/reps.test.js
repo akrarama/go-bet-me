@@ -782,6 +782,131 @@ export default (t) => {
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
   });
 
+  // ─── Похвала за серию чистых повторов ───
+  /** Все вызовы похвалы: { text, shown }. Считаем на входе в feedback, чтобы видеть и отказанные. */
+  const praiseSpy = (s) => {
+    const calls = [];
+    const hint = s.feedback.hint;
+    s.feedback.hint = (text, o) => {
+      const shown = hint(text, o);
+      if (o?.code === 'praise') calls.push({ text, shown, level: o.level });
+      return shown;
+    };
+    return calls;
+  };
+  const cleanSquats = (s, n, ms = 2400, gap = 6) => {
+    for (let i = 0; i < n; i++) {
+      s.feed(rep(squatPose, STAND, DEEP, ms));
+      s.feed(hold(squatPose(STAND), gap));
+    }
+  };
+
+  t.test('похвала: после трёх чистых приседаний подряд короткая подсказка уровня ok, без звука, уходит сама', (a) => {
+    const s = setup(squat);
+    s.feed(hold(squatPose(STAND), 10));
+    cleanSquats(s, 2);
+    a.eq(s.feedback.current, null, 'после двух похвалы ещё нет');
+    s.feed(rep(squatPose, STAND, DEEP, 2400));
+    s.feed(hold(squatPose(STAND), 3));
+    a.eq(s.ctrl.count, 3);
+    a.eq(s.feedback.current?.level, 'ok');
+    a.eq(s.feedback.current?.text, 'Отлично, темп ровный');
+    a.eq(s.sounds.length, 0, 'звука ошибки нет');
+    a.eq(s.of('fault').length + s.of('rejected').length, 0);
+    s.feed(hold(squatPose(STAND), 90)); // 3 с
+    a.eq(s.feedback.current, null, 'через пару секунд ушла сама');
+  });
+
+  t.test('похвала: ошибка рвёт серию (мелкий присед, наклон), похвала только после трёх чистых подряд', (a) => {
+    const s = setup(squat);
+    const calls = praiseSpy(s);
+    s.feed(hold(squatPose(STAND), 10));
+    cleanSquats(s, 2);
+    s.feed(rep(squatPose, STAND, { knee: 125, shin: 22, lean: 20 }, 2400)); // мелкий: не засчитан
+    s.feed(hold(squatPose(STAND), 30));
+    cleanSquats(s, 2);
+    a.eq(calls.length, 0, 'два, ошибка, два: серии из трёх не было');
+    cleanSquats(s, 1);
+    a.eq(calls.length, 1);
+    a.eq(s.ctrl.summary().extra.bestStreak, 3);
+  });
+
+  t.test('похвала: не чаще раза в 8 с, фразы по кругу', (a) => {
+    const s = setup(squat);
+    const calls = praiseSpy(s);
+    s.feed(hold(squatPose(STAND), 10));
+    cleanSquats(s, 9, 1200, 3); // быстро: по 1.5 с на повтор
+    // 3-й повтор: есть; 6-й через 4.5 с: рано; 9-й через 9 с от первой: есть
+    a.deep(calls.map((c) => [c.text, c.shown]), [['Отлично, темп ровный', true], ['Чистый повтор, так держать', true]]);
+    a.ok(calls.every((c) => c.level === 'ok'));
+  });
+
+  t.test('похвала: никогда поверх подсказки ошибки, серия ждёт следующего круга', (a) => {
+    const s = setup(squat);
+    const calls = praiseSpy(s);
+    s.feed(hold(squatPose(STAND), 10));
+    cleanSquats(s, 2);
+    s.feedback.hint('Тест: висит ошибка', { code: 'test_error', priority: PRIORITY.depth, level: 'warn', ttl: 120000 });
+    s.feed(rep(squatPose, STAND, DEEP, 2400));
+    s.feed(hold(squatPose(STAND), 3));
+    a.deep(calls.map((c) => c.shown), [false], 'на третьем повторе похвала отказана');
+    a.eq(s.feedback.current?.text, 'Тест: висит ошибка', 'ошибка осталась на экране');
+    s.feedback.clearNow();
+    cleanSquats(s, 3);
+    a.deep(calls.map((c) => c.shown), [false, true], 'на шестом показана: время отказа не считалось похвалой');
+    a.eq(s.feedback.current?.level, 'ok');
+  });
+
+  t.test('похвала: ошибка появилась сразу после неё, ошибка вытесняет похвалу', (a) => {
+    const s = setup(squat);
+    s.feed(hold(squatPose(STAND), 10));
+    cleanSquats(s, 3, 2400, 2);
+    a.eq(s.feedback.current?.level, 'ok');
+    s.feed(hold(squatPose({ ...STAND, lean: 4, vis: 0.3, farVis: 0.2 }), 14)); // пропал из кадра
+    a.eq(s.feedback.current?.level, 'warn');
+    a.eq(s.feedback.current?.code, 'visibility');
+  });
+
+  t.test('похвала: слишком быстрый повтор засчитан, но чистым не считается', (a) => {
+    const s = setup(pushup);
+    const calls = praiseSpy(s);
+    s.feed(hold(pushupPose(TOP), 10));
+    for (let i = 0; i < 2; i++) {
+      s.feed(rep(pushupPose, TOP, LOW, 1400));
+      s.feed(hold(pushupPose(TOP), 5));
+    }
+    s.feed(seq(pushupPose, [0, TOP], [300, LOW], [450, TOP])); // быстрый: подсказка про темп
+    s.feed(hold(pushupPose(TOP), 10));
+    a.eq(s.ctrl.count, 3);
+    a.eq(calls.length, 0, 'серия оборвана темпом');
+    for (let i = 0; i < 2; i++) {
+      s.feed(rep(pushupPose, TOP, LOW, 1400));
+      s.feed(hold(pushupPose(TOP), 5));
+    }
+    a.eq(calls.length, 0, 'после быстрого только два чистых');
+    s.feed(rep(pushupPose, TOP, LOW, 1400));
+    s.feed(hold(pushupPose(TOP), 5));
+    a.eq(calls.length, 1, 'третий чистый подряд после быстрого');
+  });
+
+  t.test('похвала отжиманий: три чистых подряд, свои фразы; тексты короткие и без длинного тире', (a) => {
+    const s = setup(pushup);
+    const calls = praiseSpy(s);
+    s.feed(hold(pushupPose(TOP), 10));
+    for (let i = 0; i < 12; i++) {
+      s.feed(rep(pushupPose, TOP, LOW, 2600));
+      s.feed(hold(pushupPose(TOP), 8));
+    }
+    a.deep(calls.map((c) => c.text), ['Отлично, темп ровный', 'Чистый повтор, так держать', 'Тело ровное, так держать', 'Красиво, техника чистая']);
+    const q = setup(squat);
+    const sq = praiseSpy(q);
+    q.feed(hold(squatPose(STAND), 10));
+    cleanSquats(q, 12, 2600, 8);
+    a.deep(sq.map((c) => c.text), ['Отлично, темп ровный', 'Чистый повтор, так держать', 'Глубина хорошая, так держать', 'Красиво, техника чистая']);
+    for (const c of [...calls, ...sq]) a.ok(c.text.length <= 30 && !/[—–]/.test(c.text), c.text);
+    a.eq(s.ctrl.summary().extra.bestStreak, 12);
+  });
+
   // ─── Щадящие пороги для обычного человека (явные ошибки при этом остаются) ───
   t.test('щадящие пороги: присед до 105° в кадре, наклон 50° и колено за носком 0.2 засчитываются', (a) => {
     for (const [label, bottom] of [['присед 105°', { knee: 105, shin: 22, lean: 20 }], ['наклон 50°', { ...DEEP, lean: 50 }], ['колено за носком ~0.2', { ...DEEP, shin: 36 }]]) {

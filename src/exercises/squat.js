@@ -25,7 +25,7 @@
 
 import { REPS } from '../config.js';
 import { POSE, angle, dist, tiltFromVertical } from '../vision/geometry.js';
-import { createRepController } from './reps.js';
+import { createRepController, PRAISE } from './reps.js';
 
 export const RULES = {
   // Пример жюри. Направление лица = знак(носок.x − щиколотка.x);
@@ -187,6 +187,7 @@ export function createController(deps) {
     gate: (m) => (m.rise > cfg.jumpRise && m.angle > cfg.jumpKneeMin ? GATES.jump : !isUpright(m) ? GATES.stand : !isSide(m) ? GATES.front : null),
     checks: CHECKS,
     rules: [RULES.kneesOverToes, RULES.lean],
+    praise: [PRAISE[0], PRAISE[1], 'Глубина хорошая, так держать', PRAISE[2]],
     missDelayMs: cfg.missDelayMs,
     turn(ev) {
       if (ev.type === 'valley' && ev.phase === 'UP' && ev.angle >= cfg.down && ev.angle <= cfg.shallowFrom) return { rule: RULES.shallow, value: ev.angle };
