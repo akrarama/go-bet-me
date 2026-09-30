@@ -29,17 +29,17 @@ const two = () => ({ faces: [face(), face(0.8, 0.5, 0.07)], blendshapes: [CLOSED
 
 /** Контроллер с заглушками feedback/bus и прогон кадров. */
 function setup(target = 60) {
-  const log = { hints: [], clears: [], says: [], faults: [] };
+  let t = T0;
+  const log = { hints: [], clears: [], says: [], faults: [], clearNow: 0 };
   const feedback = {
-    hint: (text, o = {}) => log.hints.push({ text, ...o }),
+    hint: (text, o = {}) => log.hints.push({ text, ...o, at: t - T0 }),
     clear: (code) => log.clears.push(code),
-    clearNow() {},
+    clearNow: () => (log.clearNow += 1),
     say: (text) => log.says.push(text),
   };
   const bus = { emit: (type, p) => type === 'fault' && log.faults.push(p) };
   const c = createController({ challenge: { target }, bus, feedback, debug: { enabled: false, set() {} } });
   c.start(T0);
-  let t = T0;
   const frameAt = (ms, scene) => {
     t = T0 + ms;
     const s = scene(ms);
@@ -167,7 +167,7 @@ export default (t) => {
 
   // ─── Глаза открыты ─────────────────────────────────────────
 
-  t.test('глаза открыты ≥ 2 с: минус жизнь, подсказка текстом и голосом, событие fault', (a) => {
+  t.test('глаза открыты ≥ 2 с: минус жизнь, подсказка текстом и звуком, событие fault', (a) => {
     const { c, run, log, codes } = setup();
     run(10000);
     run(11900, open);
@@ -182,6 +182,8 @@ export default (t) => {
     const h = log.hints.find((x) => x.code === 'eyes_open');
     a.eq(h.text, 'Глаза открыты, закрой глаза');
     a.eq(h.level, 'warn');
+    a.ok(h.speak !== false, 'звук ошибки не заглушён');
+    a.ok(log.hints.filter((x) => x.code === 'eyes_open' && x.speak !== false).length === 1, 'звук один раз, пока не исправил');
   });
 
   t.test('одно и то же нарушение не списывает жизни подряд, пока его не исправили', (a) => {
@@ -356,6 +358,106 @@ export default (t) => {
     a.ok(c.count < 8 + 2.7, `разрыв не засчитан в таймер (${c.count.toFixed(2)} с)`);
   });
 
+  t.test('разрыв кадров при спокойном лице не добавляет времени', (a) => {
+    const { c, run, frameAt } = setup();
+    run(8000);
+    const b = c.count;
+    frameAt(11000, calm); // 3 с без кадров
+    a.near(c.count, b, 1e-9, 'разрыв не засчитан');
+    run(12000);
+    a.near(c.count - b, 1, 0.06, 'после разрыва таймер идёт как обычно');
+  });
+
+  // ─── Находки ревью ─────────────────────────────────────────
+
+  t.test('новое нарушение под старшей подсказкой: своя подсказка и звук сразу', (a) => {
+    const { c, run, log, codes } = setup();
+    run(8000);
+    const twoOpen = () => ({ faces: [face(), face(0.8, 0.5, 0.07)], blendshapes: [OPEN, OPEN] });
+    run(9100, two); // второй человек: жизнь на 9.0 с, остаётся в кадре
+    const clearsBefore = log.clearNow;
+    run(12100, twoOpen); // глаза открыты с ~9.15 с: ждут паузу до 12.0 с
+    a.deep(codes(), ['two_faces', 'eyes_open']);
+    a.eq(c.lives, 1);
+    const at = log.faults[1] && log.hints.findIndex((h) => h.code === 'eyes_open');
+    const h = log.hints[at];
+    a.ok(h && h.priority > 3 && h.speak !== false, 'подсказка глаз выше старшей и со звуком');
+    a.ok(log.clearNow > clearsBefore, 'старую подсказку убрали сразу');
+    const during = log.hints.filter((x) => x.code === 'two_faces' && x.at > h.at && x.at < h.at + M.freshHintMs);
+    a.eq(during.length, 0, 'пока свежая подсказка на экране, старшая её не перебивает');
+    run(14500, twoOpen);
+    const back = log.hints.filter((x) => x.code === 'two_faces' && x.at >= h.at + M.freshHintMs);
+    a.ok(back.length > 0 && back.every((x) => x.speak === false), 'потом старшая возвращается, но без звука');
+  });
+
+  t.test('лицо пропало: это не «исправил» глаза, вторую жизнь за них не списываем', (a) => {
+    const { c, run, codes } = setup();
+    run(8000);
+    run(10500, open); // глаза: жизнь на ~10.1 с
+    run(11700, empty); // лица нет 1.2 с (меньше 2 с)
+    run(15000, open); // вернулся с открытыми глазами
+    a.deep(codes(), ['eyes_open']);
+    a.eq(c.lives, 2);
+  });
+
+  t.test('сценарий жюри: открыл глаза, вышел из кадра, вернулся с открытыми', (a) => {
+    const { c, run, codes } = setup();
+    run(10000);
+    run(13000, open);
+    run(16000, empty);
+    run(20000, open);
+    a.deep(codes(), ['eyes_open', 'face_lost']);
+    a.eq(c.lives, 1);
+    a.eq(c.failed, false);
+  });
+
+  t.test('второй человек в кадре, модель на кадр потеряла медитирующего: слежка не переходит на чужое лицо', (a) => {
+    const { c, run, codes } = setup();
+    const me = () => face(0.45);
+    const other = () => face(0.8, 0.5, 0.06);
+    run(8000, () => ({ faces: [me()], blendshapes: [CLOSED] }));
+    run(10000, () => ({ faces: [me(), other()], blendshapes: [CLOSED, OPEN] }));
+    run(10150, () => ({ faces: [other()], blendshapes: [OPEN] })) // 3 кадра видно только второго
+    run(15000, () => ({ faces: [other(), me()], blendshapes: [OPEN, CLOSED] }));
+    run(20000, () => ({ faces: [me()], blendshapes: [CLOSED] }));
+    a.deep(codes(), ['two_faces'], 'ни глаз, ни головы: медитирующий не открывал глаза и не двигался');
+    a.eq(c.lives, 2);
+    a.eq(c.view.closed, true);
+  });
+
+  t.test('одинокое чужое лицо держится 2 с: засчитываем пропажу лица и дальше следим за ним', (a) => {
+    const { c, run, codes } = setup();
+    run(8000, () => ({ faces: [face(0.45)], blendshapes: [CLOSED] }));
+    run(9000, () => ({ faces: [face(0.45), face(0.8, 0.5, 0.06)], blendshapes: [CLOSED, OPEN] }));
+    run(13000, () => ({ faces: [face(0.8, 0.5, 0.06)], blendshapes: [CLOSED] }));
+    a.ok(codes().includes('face_lost'), 'медитирующего не видно 2 с');
+    a.ok(!codes().includes('head_moving'), 'переход к другому лицу не движение головы');
+    a.eq(c.view.primary, 0);
+  });
+
+  t.test('голова двигается без остановки, посередине разрыв кадров: одна жизнь', (a) => {
+    const { run, frameAt, codes } = setup();
+    const drift = (ms) => ({ faces: [face(0.3 + 0.08 * Math.max(0, ms - 8000) / 1000)], blendshapes: [CLOSED] });
+    run(8000);
+    run(10000, drift);
+    frameAt(10800, drift); // 800 мс без кадров
+    run(14000, drift);
+    a.deep(codes(), ['head_moving']);
+  });
+
+  t.test('кадр без лица не сбивает гистерезис: мягко закрытые глаза остаются закрытыми', (a) => {
+    const { c, run, codes } = setup();
+    const soft = { eyeBlinkLeft: 0.46, eyeBlinkRight: 0.46 };
+    const firm = { eyeBlinkLeft: 0.7, eyeBlinkRight: 0.7 };
+    run(8000, () => ({ faces: [face()], blendshapes: [firm] }));
+    run(12000, () => ({ faces: [face()], blendshapes: [soft] }));
+    const b = c.count;
+    run(12050, empty);
+    run(20000, () => ({ faces: [face()], blendshapes: [soft] }));
+    a.eq(codes().length, 0);
+    a.ok(c.count - b > 7.5, `таймер идёт (${(c.count - b).toFixed(2)} с)`);
+  });
+
   t.test('summary: нарушения по видам с количеством для итогов', (a) => {
     const { c, run } = setup();
     run(8000);
@@ -373,6 +475,19 @@ export default (t) => {
     a.eq(s.extra.lives, 0);
     a.eq(s.extra.maxLives, 3);
     a.ok(s.extra.bestStreakSec >= 5.8, 'самый долгий спокойный отрезок');
+  });
+
+  t.test('для отрисовки: started, target, данные лица кадра и главное лицо', (a) => {
+    const { c, run } = setup(60);
+    a.eq(c.started, true);
+    a.eq(c.target, 60);
+    run(1000, () => ({ faces: [face(0.75, 0.5, 0.05), face()], blendshapes: [OPEN, CLOSED] }));
+    a.eq(c.faceData.faces.length, 2);
+    a.eq(c.view.primary, 1, 'главное: крупное лицо');
+    a.eq(c.view.faces, 2);
+    run(2000, empty);
+    a.eq(c.view.primary, -1);
+    a.eq(c.view.closed, null);
   });
 
   t.test('контракт: модель лица, единица секунды, жизни', (a) => {
