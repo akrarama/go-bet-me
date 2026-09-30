@@ -103,6 +103,18 @@ export function settle({ stake, bets = [], success, fee = MONEY.APP_FEE }) {
   };
 }
 
+/**
+ * Расчёт одного друга по его ставке (то же, что settle().friends[i], пока пул не переполнен):
+ * при провале игрока друг получает ставку назад и столько же из ставки игрока за вычетом комиссии,
+ * при успехе теряет ставку. Друг считает себя сам, ему не нужны остальные участники.
+ * → { amount, payout, delta, fee }, кредиты.
+ */
+export function settleFriend({ amount, success, fee = MONEY.APP_FEE }) {
+  const put = Math.max(0, toCents(amount));
+  const f = settle({ stake: fromCents(put), bets: [{ id: 'friend', amount: fromCents(put) }], success, fee }).friends[0];
+  return { amount: f.amount, payout: f.payout, delta: f.delta, fee: f.fee };
+}
+
 /** Отмена (VOID): всем возврат полностью. Та же форма, что у settle(), все delta = 0. */
 export function refundAll({ stake, bets = [] }) {
   const { S, M, rows } = fill(stake, bets);
