@@ -1145,7 +1145,7 @@ export default (t) => {
     a.eq(primaryIndex([closed, syntheticFace(0.8, 0.5, 0.9)], { x: 0.41, y: 0.5 }), 0, 'главное лицо ближе к прошлому носу');
   });
 
-  t.test('виртуальное лицо по клавише k: контроллер видит лицо без человека в кадре, e n l y работают', (a) => {
+  t.test('виртуальное лицо по клавише f: контроллер видит лицо без человека в кадре, e n l y работают', (a) => {
     const keys = {};
     const seen = { faults: [] };
     const c = createController({
@@ -1154,10 +1154,11 @@ export default (t) => {
       feedback: { hint() {}, clear() {}, clearNow() {}, say() {} },
       debug: { enabled: true, set() {}, key: (k, fn) => (keys[k] = fn) },
     });
-    a.ok(['k', 'e', 'n', 'l', 'y'].every((k) => typeof keys[k] === 'function'), 'клавиши на месте');
+    a.ok(['f', 'e', 'n', 'l', 'y'].every((k) => typeof keys[k] === 'function'), 'клавиши на месте');
+    a.eq(keys.k, undefined, 'k занята у gestures в LOBBY: не трогаем');
     const empty = { t: T0, ran: 'face', width: W, height: H, face: { t: T0, faces: [], blendshapes: [] } };
     a.eq(c.ready(empty).ok, false, 'человека нет');
-    keys.k();
+    keys.f();
     a.eq(c.ready(empty).ok, true, 'виртуальное лицо: обе галочки');
     keys.y();
     a.deep(c.ready(empty).checks.map((x) => x.ok), [true, false], 'второй человек');
