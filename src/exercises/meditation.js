@@ -3,8 +3,10 @@
 // Нарушения (раздел 6 спеки), каждое: минус жизнь, подсказка текстом и звуком ошибки, событие fault:
 //   лица нет ≥ 2 с; второе лицо ≥ 1 с; глаза открыты ≥ 2 с;
 //   голова двигается: нос сместился больше чем на 4% ширины кадра за 1 с (держится 400 мс или 8 кадров).
-// Первые 5 с после старта нарушения не считаются. Одно и то же нарушение не списывает жизни подряд,
-// пока его не исправили (условия нет 1 с, и это видно: лицо в кадре). После нарушения 3 с на исправление:
+// Первые 5 с после старта нарушения не считаются. Одно и то же нарушение не списывает жизни подряд, пока его не исправили
+// (условия нет 1 с, и это видно: лицо в кадре), но если оно висит дольше persistMs (12 с), списывает ещё жизнь, и так до
+// провала: лимита времени у медитации нет, без этого игрок, ушедший из кадра, держал бы LIVE бесконечно. За persistWarnMs (6 с)
+// подсказка предупреждает «иначе минус жизнь». После нарушения 3 с на исправление:
 // другое нарушение за это время ждёт и списывает жизнь, только если его так и не исправили.
 // Подсказка нового нарушения 1.5 с держится поверх старых: каждая списанная жизнь со своей причиной.
 // 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть). count ≥ цели: done.
@@ -23,11 +25,11 @@ import { createView } from './meditation-view.js';
  * needsFace: без лица не видно, исправил ли; needsWindow: движение видно, только когда окно носа полное.
  */
 export const RULES = [
-  { code: 'face_lost', holdMs: M.faceLostMs, priority: 4, text: 'Лицо вышло из кадра, вернись', label: 'лицо вышло из кадра' },
-  { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек, ты должен быть один', label: 'второй человек в кадре' },
-  { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', label: 'глаза открыты', needsFace: true },
+  { code: 'face_lost', holdMs: M.faceLostMs, priority: 4, text: 'Лицо вышло из кадра, вернись', warnText: 'Лицо вышло из кадра: вернись, иначе минус жизнь', label: 'лицо вышло из кадра' },
+  { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек, ты должен быть один', warnText: 'В кадре второй человек: пусть отойдёт, иначе минус жизнь', label: 'второй человек в кадре' },
+  { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', warnText: 'Глаза открыты: закрой, иначе минус жизнь', label: 'глаза открыты', needsFace: true },
   {
-    code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', label: 'голова двигалась',
+    code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', warnText: 'Голова двигается: замри, иначе минус жизнь', label: 'голова двигалась',
     needsFace: true, needsWindow: true,
   },
 ];
@@ -44,7 +46,7 @@ const round1 = (v) => Math.round(v * 10) / 10;
 
 export function createController({ challenge, bus, feedback, debug }) {
   const track = noseTracker(M.headWindowMs);
-  const rules = RULES.map((rule) => ({ rule, since: null, lastOn: 0, frames: 0, fired: false, shown: false, count: 0 }));
+  const rules = RULES.map((rule) => ({ rule, since: null, lastOn: 0, frames: 0, fired: false, firedAt: 0, shown: false, count: 0 }));
   const byCode = Object.fromEntries(rules.map((s) => [s.rule.code, s]));
   let started = false;
   let t0 = 0;
@@ -103,8 +105,10 @@ export function createController({ challenge, bus, feedback, debug }) {
         // а исправленным нарушение за это время не считается: его просто не было видно
         track.reset();
         for (const s of rules) {
-          if (s.fired) s.lastOn = t;
-          else s.since = null;
+          if (s.fired) {
+            s.lastOn = t;
+            s.firedAt += gap; // кадров не было: висит ли нарушение, не видно, время для «ещё минус жизнь» не идёт
+          } else s.since = null;
           s.frames = 0;
         }
       }
@@ -196,14 +200,16 @@ export function createController({ challenge, bus, feedback, debug }) {
           if (s.since == null) s.since = t;
           s.lastOn = t;
           if (s.fired) {
-            // нарушение ещё не исправили: подсказка держится (без звука), жизнь второй раз не списываем;
-            // пока свежая подсказка другого нарушения на экране, свою не просим
+            // нарушение ещё не исправили: подсказка держится (без звука), через persistWarnMs предупреждает про жизнь,
+            // через persistMs списывает ещё одну (и так до провала); пока свежая подсказка другого нарушения на экране, свою не просим
+            if (!c.done && t - s.firedAt >= M.persistMs && t >= nextFaultAt) fire(s, t);
             active ??= rule.code;
             fired.push(rule.code);
             s.shown = true;
             const freshOn = fresh && t < fresh.until;
             if (!freshOn || fresh.code === rule.code) {
-              feedback.hint(rule.text, { level: 'warn', priority: rule.priority + (freshOn ? FRESH : 0), code: rule.code, speak: false });
+              const late = t - s.firedAt >= M.persistWarnMs;
+              feedback.hint(late ? rule.warnText : rule.text, { level: 'warn', priority: rule.priority + (freshOn ? FRESH : 0), code: rule.code, speak: false });
             }
             continue;
           }
@@ -282,6 +288,7 @@ export function createController({ challenge, bus, feedback, debug }) {
   function fire(s, t) {
     const { rule } = s;
     s.fired = true;
+    s.firedAt = t;
     s.shown = true;
     s.count += 1;
     nextFaultAt = t + M.cooldownMs;
