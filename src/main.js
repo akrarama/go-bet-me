@@ -1,12 +1,11 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { DEBUG, DEBUG_STATE, VISION, CHALLENGES, JOIN_ID } from './config.js';
+import { DEBUG, DEBUG_STATE, CHALLENGES, JOIN_ID } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
 import { vision } from './vision/runner.js';
-import * as models from './vision/models.js';
 import { gestures } from './vision/gestures.js';
 import { draw } from './draw.js';
 import { feedback } from './feedback.js';
@@ -142,6 +141,7 @@ function onFrame(ctx, frame) {
 }
 
 async function boot() {
+  ui.loader.show('Проверяю аккаунт');
   if (!JOIN_ID && await requireAccount()) return;
   const ctx = makeContext();
   app.init(ctx);
@@ -151,17 +151,9 @@ async function boot() {
   debug.mount($('#debug'));
   guardInput();
 
-  ui.loader.show('Включаю камеру');
-  try {
-    await camera.start($('#video'));
-  } catch (err) {
-    console.error(err);
-    return ui.fatal(...cameraError(err));
-  }
-  $('#stage').classList.toggle('is-mirrored', camera.mirror);
-  draw.resize();
-
-  ui.loader.show('Загружаю распознавание');
+  // Camera permission/startup and the first hand model are independent. Fetch them together
+  // so cold start takes the slower of the two instead of adding both delays.
+  ui.loader.show('Подключаю камеру и запускаю распознавание');
   const offProgress = bus.on('vision:progress', ({ model, loaded, total }) => {
     if (model !== 'gesture') return;
     if (total && loaded >= total) return ui.loader.show('Запускаю распознавание');
@@ -170,15 +162,26 @@ async function boot() {
   vision.onFrame((frame) => onFrame(ctx, frame));
   vision.start();
   vision.use('gesture');
+  const cameraReady = camera.start($('#video'));
+  const gestureReady = vision.ready('gesture');
+  gestureReady.catch(() => {}); // camera failure may return before the model promise is awaited
   try {
-    await vision.ready('gesture');
+    await cameraReady;
+  } catch (err) {
+    console.error(err);
+    offProgress();
+    return ui.fatal(...cameraError(err));
+  }
+  $('#stage').classList.toggle('is-mirrored', camera.mirror);
+  draw.resize();
+  try {
+    await gestureReady;
   } catch (err) {
     console.error(err);
     return ui.fatal('Распознавание не загрузилось', 'Проверь интернет и обнови страницу.');
   } finally {
     offProgress();
   }
-  models.preload(VISION.preload); // остальные модели в фоне
 
   gestures.start(ctx);
   dwell.start(ctx);
