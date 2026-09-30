@@ -148,7 +148,8 @@ async function boot() {
     vision.start();
     vision.use('gesture');
   }
-  if (!JOIN_ID && await requireAccount()) return;
+  // ?debug=1 (разработка и автопрогоны) идёт без входа: кошелёк тогда локальный, как до аккаунтов
+  if (!JOIN_ID && !DEBUG && await requireAccount()) return;
   const ctx = makeContext();
   app.init(ctx);
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);
