@@ -146,6 +146,12 @@ export function lineVars(bot = {}, extra = {}) {
   return { amount: sum, credits: `${sum} ${plural(amount, 'кредит', 'кредита', 'кредитов')}`, ...extra };
 }
 
+/** {n} и {left} для реплик про счёт. В медитации это секунды: «Уже 15 с?», а не голое «Уже 15?». */
+export function countVars(count, target, unit) {
+  const left = target - count;
+  return unit === 'секунды' ? { n: `${count} с`, left: `${left} с` } : { n: count, left };
+}
+
 /**
  * Случайная реплика из пула. used: что уже сказано в этом челлендже, последнее в конце.
  * Сначала то, чего ещё не было, если было всё, то любое, кроме последнего. Нечего сказать: null.
@@ -330,7 +336,7 @@ function onCount({ count, target, unit }) {
   const mark = Math.floor(count / (seconds ? MONEY.feed.secondsEvery : MONEY.feed.repsEvery));
   const milestone = mark > live.mark;
   live.mark = Math.max(live.mark, mark);
-  const vars = { n: count, left: target - count };
+  const vars = countVars(count, target, unit);
   const type = live.ch.type;
   if (!seconds && vars.left <= 2 && !live.nervous) {
     react('nervous', (bot) => {
