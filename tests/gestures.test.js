@@ -1,8 +1,9 @@
-// Тесты блока 2 (Жесты): удержание жеста, рука над головой, liveness.
+// Тесты блока 2 (Жесты): удержание жеста, рука над головой, liveness, dwell, сглаживание курсора.
 // Синтетические последовательности кадров, время в мс (шаг 50 мс ≈ 20 кадров/с, целые числа без округлений).
 
 import { GESTURES } from '../src/config.js';
 import { createGestureGate, createHandUpTracker, pickLivenessTask, createLivenessJudge, LIVENESS_TEXT } from '../src/vision/gestures.js';
+import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 
 const G = GESTURES;
 const STEP = 50;
@@ -40,6 +41,30 @@ function pose(tr, lm, from, to) {
   for (let t = from; t < to; t += STEP) for (const side of tr.update(typeof lm === 'function' ? lm(t) : lm, t)) fired.push({ side, t });
   return fired;
 }
+
+const btn = (id, x, y, w = 200, h = 90, disabled = false) => ({ el: { id }, x, y, w, h, disabled });
+const center = (b) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+
+/** Ведёт курсор pos (или t → pos) по целям targets (или t → targets) с from до to, шаг 20 мс. */
+function hover(dw, pos, targets, from, to, step = 20) {
+  const clicks = [];
+  let last = null;
+  for (let t = from; t < to; t += step) {
+    last = dw.update(typeof pos === 'function' ? pos(t) : pos, typeof targets === 'function' ? targets(t) : targets, t);
+    if (last.click) clicks.push({ id: last.click.id, t });
+  }
+  return { clicks, last };
+}
+
+/** Детерминированный шум 0..1. */
+function rng(seed = 7) {
+  let s = seed >>> 0;
+  return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+}
+const variance = (xs) => {
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length;
+};
 
 export default (t) => {
   // ─── Удержание жеста ──────────────────────────────────────────
@@ -499,5 +524,215 @@ export default (t) => {
     a.near(j.left(3500), G.livenessSec - 2.5, 1e-9);
     a.eq(j.left(1000 + G.livenessSec * 1000), 0);
     a.eq(j.left(99999), 0);
+  });
+
+  // ─── Dwell ────────────────────────────────────────────────────
+
+  t.test('dwell: прогресс 0.5 на половине dwellMs, ровно один клик на dwellMs', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    const half = hover(dw, center(A), [A], 0, G.dwellMs / 2 + 1);
+    a.eq(half.last.target, A.el);
+    a.near(half.last.progress, 0.5, 1e-9);
+    const r = dw.update(center(A), [A], G.dwellMs);
+    a.eq(r.click, A.el);
+    a.eq(r.progress, 1);
+    const rest = hover(dw, center(A), [A], G.dwellMs + 20, 4000);
+    a.deep(rest.clicks, [], 'палец остался на кнопке:');
+    a.eq(rest.last.progress, 0);
+    a.eq(rest.last.blocked, true);
+    a.eq(rest.last.target, A.el, 'наведение видно, кольца нет:');
+  });
+
+  t.test('dwell: ушёл с кнопки: прогресс сбрасывается', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    hover(dw, center(A), [A], 0, 620);
+    const off = dw.update({ x: 900, y: 900 }, [A], 620);
+    a.eq(off.target, null);
+    a.eq(off.progress, 0);
+    const back = hover(dw, center(A), [A], 640, 640 + G.dwellMs / 2 + 1);
+    a.near(back.last.progress, 0.5, 1e-9);
+    a.deep(back.clicks, []);
+  });
+
+  t.test('dwell: pad ловит палец чуть снаружи, далеко снаружи нет', (a) => {
+    const A = btn('a', 100, 100);
+    const near = createDweller().update({ x: A.x - G.dwellPad + 2, y: 145 }, [A], 0);
+    a.eq(near.target, A.el);
+    const far = createDweller().update({ x: A.x - G.dwellPad - 4, y: 145 }, [A], 0);
+    a.eq(far.target, null);
+    const below = createDweller().update({ x: 200, y: A.y + A.h + G.dwellPad - 2 }, [A], 0);
+    a.eq(below.target, A.el);
+  });
+
+  t.test('dwell: leavePad держит кнопку у края, дальше отпускает', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    dw.update(center(A), [A], 0);
+    const edge = dw.update({ x: A.x - G.dwellLeavePad + 4, y: 145 }, [A], 20);
+    a.eq(edge.target, A.el, 'у края в пределах leavePad:');
+    a.near(edge.progress, 20 / G.dwellMs, 1e-9, 'прогресс не сбросился:');
+    const out = dw.update({ x: A.x - G.dwellLeavePad - 4, y: 145 }, [A], 40);
+    a.eq(out.target, null);
+  });
+
+  t.test('dwell: ближайший центр выигрывает', (a) => {
+    const A = btn('a', 0, 0);
+    const B = btn('b', 212, 0);
+    a.eq(createDweller().update({ x: 208, y: 45 }, [A, B], 0).target, B.el);
+    a.eq(createDweller().update({ x: 204, y: 45 }, [A, B], 0).target, A.el);
+    a.eq(createDweller().update({ x: 208, y: 45 }, [B, A], 0).target, B.el, 'порядок в списке не важен:');
+  });
+
+  t.test('dwell: disabled пропускается', (a) => {
+    const A = btn('a', 100, 100, 200, 90, true);
+    const B = btn('b', 312, 100);
+    const dw = createDweller();
+    const r = hover(dw, center(A), [A, B], 0, 3000);
+    a.eq(r.last.target, null);
+    a.deep(r.clicks, []);
+    const dw2 = createDweller();
+    const C = btn('c', 100, 100);
+    hover(dw2, center(C), [C], 0, 300);
+    const off = dw2.update(center(C), [{ ...C, disabled: true }], 320);
+    a.eq(off.target, null, 'стала disabled под пальцем:');
+  });
+
+  t.test('dwell: после клика та же кнопка заблокирована, пока палец не уйдёт и не вернётся', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    a.deep(hover(dw, center(A), [A], 0, 3000).clicks, [{ id: 'a', t: G.dwellMs }]);
+    hover(dw, { x: 900, y: 900 }, [A], 3000, 3100);
+    a.deep(hover(dw, center(A), [A], 3100, 5000).clicks, [{ id: 'a', t: 3100 + G.dwellMs }]);
+  });
+
+  t.test('dwell: пропал палец после клика: при возврате снова можно нажать', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    hover(dw, center(A), [A], 0, 1100);
+    dw.update(null, [A], 1100);
+    a.deep(hover(dw, center(A), [A], 1120, 3000).clicks, [{ id: 'a', t: 1120 + G.dwellMs }]);
+  });
+
+  t.test('dwell: кнопка перерисована на том же месте после клика: не нажимается снова', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    const A2 = btn('a2', 100, 100);
+    hover(dw, center(A), [A], 0, G.dwellMs + 20);
+    const r = hover(dw, center(A2), [A2], G.dwellMs + 20, 4000);
+    a.deep(r.clicks, []);
+    a.eq(r.last.target, A2.el);
+    a.eq(r.last.blocked, true);
+    hover(dw, { x: 900, y: 900 }, [A2], 4000, 4100);
+    a.deep(hover(dw, center(A2), [A2], 4100, 6000).clicks, [{ id: 'a2', t: 4100 + G.dwellMs }]);
+  });
+
+  t.test('dwell: после клика соседняя кнопка под пальцем в зоне нажатой не нажимается', (a) => {
+    // «Пополнить» заменилась кнопками ставок: под пальцем оказалась другая кнопка
+    const dw = createDweller();
+    const T = btn('topup', 100, 100, 400, 90);
+    hover(dw, center(T), [T], 0, G.dwellMs + 20);
+    const S = btn('stake', 250, 100, 150, 90);
+    const r = hover(dw, center(T), [S], G.dwellMs + 20, 4000);
+    a.deep(r.clicks, []);
+    a.eq(r.last.blocked, true);
+  });
+
+  t.test('dwell: settle прячет цели и блокирует кнопку под неподвижным пальцем', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    dw.settle(0);
+    const during = hover(dw, center(A), [A], 0, G.dwellSettleMs);
+    a.eq(during.last.target, null, 'кнопки ещё въезжают:');
+    const after = hover(dw, center(A), [A], G.dwellSettleMs, 4000);
+    a.deep(after.clicks, []);
+    a.eq(after.last.target, A.el);
+    a.eq(after.last.blocked, true);
+    hover(dw, { x: 900, y: 900 }, [A], 4000, 4100);
+    a.deep(hover(dw, center(A), [A], 4100, 6000).clicks, [{ id: 'a', t: 4100 + G.dwellMs }]);
+  });
+
+  t.test('dwell: settle: палец пришёл на кнопку после settle: нажимается как обычно', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    dw.settle(0);
+    hover(dw, { x: 900, y: 900 }, [A], 0, 600);
+    a.deep(hover(dw, center(A), [A], 600, 3000).clicks, [{ id: 'a', t: 600 + G.dwellMs }]);
+  });
+
+  t.test('dwell: курсор спрятан во время settle: потом наведение не заблокировано', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    dw.settle(0);
+    hover(dw, null, [A], 0, 700);
+    a.deep(hover(dw, center(A), [A], 700, 3000).clicks, [{ id: 'a', t: 700 + G.dwellMs }]);
+  });
+
+  t.test('dwell: цель, которой больше нет в списке, сбрасывается', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    hover(dw, center(A), [A], 0, 520);
+    const gone = dw.update(center(A), [], 520);
+    a.eq(gone.target, null);
+    a.eq(gone.progress, 0);
+    const back = hover(dw, center(A), [A], 540, 540 + G.dwellMs / 2 + 1);
+    a.near(back.last.progress, 0.5, 1e-9, 'наведение заново:');
+  });
+
+  t.test('dwell: reset', (a) => {
+    const dw = createDweller();
+    const A = btn('a', 100, 100);
+    hover(dw, center(A), [A], 0, 1100);
+    dw.reset();
+    a.deep(hover(dw, center(A), [A], 2000, 4000).clicks, [{ id: 'a', t: 2000 + G.dwellMs }]);
+  });
+
+  // ─── One Euro ─────────────────────────────────────────────────
+
+  t.test('One Euro: первая точка проходит как есть, reset забывает прошлое', (a) => {
+    const f = createOneEuro2D();
+    a.deep(f.filter(10, 20, 0), { x: 10, y: 20 });
+    f.filter(500, 20, 66);
+    f.reset();
+    a.deep(f.filter(300, 400, 1000), { x: 300, y: 400 });
+  });
+
+  t.test('One Euro: в покое дрожание сильно гаснет', (a) => {
+    const f = createOneEuro2D();
+    const r = rng(11);
+    const raw = { x: [], y: [] };
+    const out = { x: [], y: [] };
+    for (let i = 0; i < 90; i++) {
+      const x = 640 + (r() - 0.5) * 12;
+      const y = 360 + (r() - 0.5) * 12;
+      const p = f.filter(x, y, i * 66);
+      if (i < 15) continue;
+      raw.x.push(x);
+      raw.y.push(y);
+      out.x.push(p.x);
+      out.y.push(p.y);
+    }
+    const ratio = (variance(out.x) + variance(out.y)) / (variance(raw.x) + variance(raw.y));
+    a.ok(ratio < 0.35, `дисперсия упала только до ${ratio.toFixed(2)} от исходной`);
+  });
+
+  t.test('One Euro: скачок догоняется быстро и до конца', (a) => {
+    const f = createOneEuro2D();
+    let t = 0;
+    for (; t <= 1000; t += 66) f.filter(100, 100, t);
+    const first = f.filter(500, 100, t);
+    a.ok(first.x > 300, `первый кадр после скачка: ${first.x.toFixed(1)}, ждали больше половины пути`);
+    let p = first;
+    for (let i = 0; i < 30; i++) p = f.filter(500, 100, (t += 66));
+    a.near(p.x, 500, 1, 'через 2 с:');
+    a.near(p.y, 100, 1e-9);
+  });
+
+  t.test('One Euro: повтор времени не ломает фильтр', (a) => {
+    const f = createOneEuro2D();
+    f.filter(100, 100, 0);
+    const p = f.filter(200, 200, 0);
+    a.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
   });
 };
