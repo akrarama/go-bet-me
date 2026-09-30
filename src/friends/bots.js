@@ -20,13 +20,14 @@
 
 import { MONEY } from '../config.js';
 import { bus } from '../bus.js';
-import { acceptBet, poolLeft, formatCredits, plural } from '../money.js';
+import { acceptBet, poolLeft, settleFriend, formatCredits, plural } from '../money.js';
 import { ui, esc, $ } from '../ui.js';
 
 // ─── Реплики ────────────────────────────────────────────────────
 // {а}: «а» для бота женского рода («поставил{а}» → «поставила»), для мужского пусто. Только про самого бота:
 // пол игрока неизвестен, поэтому к игроку без прошедшего времени и кратких прилагательных («устал», «смог»).
-// {n} счёт сейчас, {left} сколько осталось, {target} цель, {amount} ставка бота числом, {credits} она же со словом.
+// {n} счёт сейчас, {left} сколько осталось, {target} цель, {amount} ставка бота числом, {credits} она же со словом,
+// {wins} сколько бот выиграл, если игрок не справился (ставка минус комиссия, как в строке расчёта), со словом.
 // all: подходят к любому типу челленджа, squat / pushup / meditation: только к своему.
 
 export const LINES = {
@@ -87,13 +88,13 @@ export const LINES = {
   // финиш, игрок не сделал: бот выиграл свою ставку
   botWon: {
     all: [
-      'Спасибо за {credits} 😎',
+      'Спасибо за {wins} 😎',
       'Я же говорил{а}!',
       'Лёгкие деньги, спасибо',
       'Приходи ещё, мне понравилось',
       'Не расстраивайся. Мне весело 😂',
       'Я знал{а}, что так будет',
-      'Твои {credits} теперь мои',
+      'Твои {wins} теперь мои',
     ],
     squat: ['Ноги подвели? Бывает 😏'],
     pushup: ['Руки подвели? Бывает 😏'],
@@ -153,7 +154,13 @@ export function fill(template, bot = {}, vars = {}) {
 export function lineVars(bot = {}, extra = {}) {
   const amount = Number(bot.amount) || 0;
   const sum = formatCredits(amount);
-  return { amount: sum, credits: `${sum} ${plural(amount, 'кредит', 'кредита', 'кредитов')}`, ...extra };
+  const gain = settleFriend({ amount, success: false }).delta; // 5 → 4,5: столько бот реально получает сверху
+  return {
+    amount: sum,
+    credits: `${sum} ${plural(amount, 'кредит', 'кредита', 'кредитов')}`,
+    wins: `${formatCredits(gain)} ${plural(gain, 'кредит', 'кредита', 'кредитов')}`,
+    ...extra,
+  };
 }
 
 /** {n} и {left} для реплик про счёт. В медитации это секунды: «Уже 15 с?», а не голое «Уже 15?». */

@@ -641,6 +641,10 @@ function botsTests(t) {
     a.eq(arrive({ stake: 10, bets: [] }, DIMA).toast.text, 'Дима поставил 5 против тебя');
     a.eq(arrive({ stake: 10, bets: [] }, ANYA).toast.text, 'Аня поставила 5 против тебя');
     a.eq(fill('Спасибо за {credits}', DIMA, lineVars(DIMA)), 'Спасибо за 5 кредитов');
+    a.eq(fill('Спасибо за {wins} 😎', DIMA, lineVars(DIMA)), 'Спасибо за 4,5 кредита 😎', 'бот благодарит за то, что реально выиграл, как в строке расчёта');
+    a.eq(lineVars({ amount: 10 }).wins, '9 кредитов');
+    a.eq(lineVars({ amount: 20 }).wins, '18 кредитов');
+    a.eq(lineVars({ amount: 0 }).wins, '0 кредитов');
   });
 
   t.test('боты: сумма против не больше ставки, кто раньше, остальным «пул полон»', (a) => {
