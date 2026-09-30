@@ -6,7 +6,7 @@ import { GESTURES } from '../config.js';
 import { camera } from '../camera.js';
 import { sound } from '../sound.js';
 import { esc } from '../ui.js';
-import { gestures, LIVENESS_TEXT, createLivenessJudge, pickLivenessTask } from '../vision/gestures.js';
+import { gestures, LIVENESS_TEXT, createLivenessJudge, livenessTaskFor } from '../vision/gestures.js';
 import { setHold } from './idle.js';
 import { coach, drawWristRing } from './lobby.js';
 
@@ -20,7 +20,7 @@ export default {
   model: ['gesture', 'pose'],
 
   enter(ctx) {
-    const task = (lastTask = pickLivenessTask(GESTURES.livenessTasks, lastTask));
+    const task = (lastTask = livenessTaskFor(gestures.current, lastTask)); // не жест, который уже в руке с LOBBY
     const text = LIVENESS_TEXT[task];
     const sec = GESTURES.livenessSec;
     const judge = createLivenessJudge(task, { t0: performance.now(), sec });
@@ -122,6 +122,8 @@ export default {
     if (!side) {
       const p = gestures.pending;
       setHold(r.dial, p?.name === r.task ? p.progress : 0);
+      // страховка: нужный жест держат с прошлого экрана (latch), засчитается только показанный заново
+      coach(ctx, r, gestures.current === r.task && !p ? 'gesture-rearm' : null, 'Опусти руку и покажи снова');
       return;
     }
     const arm = gestures.arms?.[side];

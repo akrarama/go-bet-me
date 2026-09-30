@@ -328,6 +328,14 @@ export function pickLivenessTask(tasks = GESTURES.livenessTasks, prev = null, rn
 }
 
 /**
+ * Задание для LIVENESS: не тот жест, что человек уже держит (held = gestures.current).
+ * Его заблокировал latch при смене экрана, и держать его дальше бесполезно: засчитан не будет.
+ */
+export function livenessTaskFor(held, prev = null, tasks = GESTURES.livenessTasks, rnd = Math.random) {
+  return pickLivenessTask(tasks.filter((task) => task !== held), prev, rnd);
+}
+
+/**
  * Судья задания. Verdict = { result: 'pass' | 'fail' | null, hint: string | null }.
  * judge.onGesture(name, t), judge.onHandUp(side, t, { otherUp }), judge.tick(t) → Verdict
  * judge.left(t) → секунд осталось; judge.done: null | 'pass' | 'fail' (после него всё молчит).

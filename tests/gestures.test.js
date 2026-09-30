@@ -2,7 +2,7 @@
 // Синтетические последовательности кадров, время в мс (шаг 50 мс ≈ 20 кадров/с, целые числа без округлений).
 
 import { GESTURES } from '../src/config.js';
-import { createGestureGate, createHandUpTracker, pickLivenessTask, createLivenessJudge, LIVENESS_TEXT } from '../src/vision/gestures.js';
+import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT } from '../src/vision/gestures.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 
 const G = GESTURES;
@@ -678,6 +678,28 @@ export default (t) => {
     a.eq(gone.progress, 0);
     const back = hover(dw, center(A), [A], 540, 540 + G.dwellMs / 2 + 1);
     a.near(back.last.progress, 0.5, 1e-9, 'наведение заново:');
+  });
+
+  t.test('проверка вживую: ладонь, поднятая для старта в LOBBY, не выпадает заданием', (a) => {
+    const gate = createGestureGate(G);
+    a.eq(show(gate, 'Open_Palm', 0, 1000).length, 1, 'в LOBBY ладонь сработала');
+    gate.latch(); // смена экрана на LIVENESS
+    // баг: с заданием «ладонь» та же поднятая ладонь не срабатывает все 5 с → ложный провал
+    a.eq(show(gate, 'Open_Palm', 1000, 6000).length, 0, 'ладонь после latch не срабатывает');
+    const tasks = new Set();
+    for (let i = 0; i < 40; i++) tasks.add(livenessTaskFor(gate.current, null, G.livenessTasks, () => i / 40));
+    a.ok(!tasks.has('Open_Palm'), 'ладони нет среди заданий');
+    a.eq(tasks.size, 3, 'остальные три задания возможны');
+    // задание 👍: смена жеста снимает latch, 👍 срабатывает и проверка проходит
+    const judge = createLivenessJudge('Thumb_Up', { t0: 6000 });
+    const fired = show(gate, 'Thumb_Up', 6000, 7000);
+    a.eq(fired[0]?.name, 'Thumb_Up');
+    a.eq(judge.onGesture(fired[0].name, fired[0].t).result, 'pass');
+    // без руки в кадре годится любое задание, и прошлое не повторяется
+    const any = new Set();
+    for (let i = 0; i < 40; i++) any.add(livenessTaskFor('None', 'Thumb_Up', G.livenessTasks, () => i / 40));
+    a.eq(any.size, 3);
+    a.ok(!any.has('Thumb_Up'));
   });
 
   t.test('dwell: reset', (a) => {
