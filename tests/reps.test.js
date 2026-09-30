@@ -203,6 +203,32 @@ function setup(mod, { target = 10, voice = false } = {}) {
   return { ctrl, feedback, events, of, spoken, sounds, clock, feed, synth, get t() { return t; } };
 }
 
+
+/**
+ * Трасса настоящего ролика (fixtures/traces, в git не лежит): кадры → контроллер, 15 fps.
+ * Только в jsc (readFile) и только если трасса есть рядом с репо, иначе null.
+ */
+function replayTrace(name, mod) {
+  let data = null;
+  try {
+    data = typeof readFile === 'function' ? JSON.parse(readFile(`../fixtures/traces/${name}.json`)) : null;
+  } catch {
+    data = null;
+  }
+  if (!data) return null;
+  const s = setup(mod, { target: 999 });
+  const { fps, width, height } = data.input;
+  data.frames.forEach((f, i) => {
+    const t = 1 + (i * 1000) / fps;
+    const raw = Array.isArray(f) ? f : f?.lm;
+    const lm = raw ? raw.map(([x, y, z, visibility]) => ({ x, y, z, visibility })) : null;
+    s.clock.to(t);
+    if (i === 0) s.ctrl.start(t);
+    s.ctrl.frame({ t, ran: 'pose', width, height, pose: { t, landmarks: lm } }, t);
+  });
+  return s;
+}
+
 const STAND = { knee: 176, shin: 4, lean: 4 };
 const DEEP = { knee: 78, shin: 28, lean: 32 };
 const TOP = { elbow: 172 };
@@ -660,6 +686,28 @@ export default (t) => {
     q.feed(hold(pushupPose(TOP), 6));
     a.eq(q.feedback.current?.code, 'pushup_half_down');
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
+  });
+
+
+  // ─── Настоящие ролики (калибровка порогов) ───
+  t.test('ролик: приседания сбоку: 5 засчитано, шестой не засчитан за наклон спины', (a) => {
+    const s = replayTrace('squat-side', squat);
+    if (!s) return;
+    a.eq(s.ctrl.count, 5);
+    a.deep(s.of('rejected').map((e) => e.code), ['torso_lean']);
+  });
+
+  t.test('ролик: отжимания сбоку: 3 полных повтора (четвёртый обрезан заставкой)', (a) => {
+    const s = replayTrace('pushup-side-short', pushup);
+    if (!s) return;
+    a.eq(s.ctrl.count, 3);
+    a.eq(s.of('rejected').length, 0);
+  });
+
+  t.test('ролик: отжимания с разных ракурсов: 13, спереди счёт на паузе', (a) => {
+    const s = replayTrace('pushup-horizontal', pushup);
+    if (!s) return;
+    a.eq(s.ctrl.count, 13);
   });
 
   // ─── Итоги ───
