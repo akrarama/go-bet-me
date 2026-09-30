@@ -1,6 +1,7 @@
 // Тесты блока 3 (Деньги): расчёт по разделу 7 спеки (пример S = 10, два друга по 5),
 // ставки против в пул, суммы для экрана. Всё на синтетике, без DOM, идёт в jsc.
 
+import friendsTests from './friends.test.js';
 import { settle, refundAll, acceptBet, poolLeft, poolTotal, toCents, formatCredits, formatFee, plural } from '../src/money.js';
 
 const bet = (id, amount, extra = {}) => ({ id, name: id, avatar: '', amount, ...extra });
@@ -602,4 +603,5 @@ export default (t) => {
   walletTests(t);
   botsTests(t);
   screensTests(t);
+  friendsTests(t); // друг по ссылке (P1): tests/friends.test.js
 };
