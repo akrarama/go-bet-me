@@ -39,6 +39,7 @@ export const TEXT = {
   stake: (x) => `ставка ${formatCredits(x)} кр.`,
   against: (x) => `против ${formatCredits(x)} кр.`,
   full: 'пул был полон',
+  left: 'ушёл, ставка возвращена',
   fee: (f, open = 0) => `комиссия ${formatFee(f)}${toCents(open) > 0 ? ` и незакрытые ${formatCredits(open)} кр.` : ''}`,
   soloWin: 'Никто не поставил против, ставка вернулась',
   soloLose: 'Никто не поставил против, ставка ушла создателям',
@@ -119,13 +120,16 @@ export function reasonText(session) {
  * Соло: только игрок, под ним одна фраза, куда ушла ставка. reaction(id): реплика бота на финише или null.
  * → [{ kind: 'you' | 'friend' | 'app', avatar, name, detail, quote, delta }]
  */
-export function ledgerRows(st, { avatar = '', reaction = () => null } = {}) {
+export function ledgerRows(st, { avatar = '', reaction = () => null, left = [] } = {}) {
   const rows = [{ kind: 'you', avatar, name: TEXT.you, detail: TEXT.stake(st.player.stake), quote: null, delta: st.player.delta }];
-  if (st.solo) return rows;
+  // друг по ссылке ушёл до финиша: из расчёта выпал, ни выплаты, ни комиссии
+  const gone = left.map((l) => ({ kind: 'friend', avatar: l.avatar, name: l.name, detail: TEXT.left, quote: null, delta: 0 }));
+  if (st.solo) return [...rows, ...gone];
   for (const f of st.friends) {
     const detail = f.full ? TEXT.full : TEXT.against(f.amount);
     rows.push({ kind: 'friend', avatar: f.avatar, name: f.name, detail, quote: reaction(f.id) || null, delta: f.delta });
   }
+  rows.push(...gone);
   rows.push({ kind: 'app', avatar: '', name: TEXT.app, detail: TEXT.fee(st.fee, st.creators.uncovered), quote: null, delta: st.creators.delta });
   return rows;
 }
@@ -274,7 +278,7 @@ export default {
     const res = wallet.settle(s.challengeId); // выплата здесь, один раз
     const paid = res && !res.settlement.voided ? res : null; // отменённый раунд (только отладка) показываем как предпросмотр
     const st = paid?.settlement ?? settle({ stake: ch.stake, bets: ch.bets, success: s.success });
-    const rows = ledgerRows(st, { avatar: def.emoji, reaction: (id) => bots.reaction?.(id) });
+    const rows = ledgerRows(st, { avatar: def.emoji, reaction: (id) => bots.reaction?.(id), left: paid?.round?.left ?? [] });
     const fmt = def.unit === 'секунды' ? 'time' : 'int';
     const change = paid ? fromCents(toCents(paid.round.balanceAfter) - toCents(paid.round.balanceBefore)) : 0;
     const balance = paid

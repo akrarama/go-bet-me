@@ -9,6 +9,8 @@
 //   guest:wallet {balance, delta, reason}   баланс друга изменился: hold | settle | refund | topup | sync | reset
 //
 // Кошелёк друга (guest-wallet.js): на start списывает его ставку, на end рассчитывает, на void возвращает.
+// Пульс: io.tick() зовёт peer.js раз в MONEY.friend.pingMs: шлёт ping хосту и следит, слышно ли хоста. Молчит
+// hostSilentMs: в раунде ставка возвращается (кошелёк друга) и экран получает msg void с причиной left, связь потеряна.
 
 import { MONEY } from '../config.js';
 import { betId, cleanText, cleanName, cleanAvatar, parseHostMsg } from './protocol.js';
@@ -17,7 +19,7 @@ import { betId, cleanText, cleanName, cleanAvatar, parseHostMsg } from './protoc
  * bus: шина. wallet: createGuestWallet(). name, avatar: если экран не передал, случайные из MONEY.friend.guests.
  * Возвращает { api, io }: api отдаётся экрану, io для peer.js (связь с сетью).
  */
-export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, now = () => Date.now(), timers = globalThis }) {
+export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, now = () => Date.now() }) {
   const cfg = MONEY.friend;
   const pick = cfg.guests[Math.floor(rng() * cfg.guests.length)] ?? {};
   const me = { name: cleanName(name || pick.name), avatar: cleanAvatar(avatar || pick.avatar) };
@@ -29,7 +31,8 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
   let myBet = 0; // ставка друга в этом челлендже (принята хостом)
   let challengeId = null;
   let lastReactAt = -Infinity;
-  let lostTimer = null; // связь с игроком пропала посреди раунда: ждём MONEY.friend.hostLostMs, потом возвращаем ставку
+  let lastHeard = null; // когда в последний раз слышали хоста (любое сообщение); null пока не подключились
+  let silentDone = false; // тишина уже обработана, пока хост не заговорил снова
 
   wallet.recover('interrupted'); // прошлый раз закрыли вкладку посреди челленджа: ставка возвращается
   wallet.subscribe(({ reason, delta, balance }) => bus.emit('guest:wallet', { balance, delta, reason }));
@@ -46,11 +49,14 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
   }
 
   function onMessage(data) {
+    lastHeard = now(); // любое сообщение хоста = он жив
+    silentDone = false;
     const msg = parseHostMsg(data);
-    if (!msg) return;
+    if (!msg || msg.t === 'ping') return; // ping экрану не нужен
     switch (msg.t) {
       case 'lobby':
         challengeId = msg.challenge?.id ?? challengeId;
+        wallet.topUpIfBroke(); // на каждом lobby: кончились кредиты, пополняем до старта, экран увидит guest:wallet reason topup
         lobby = msg;
         myBet = ownAmount(msg);
         break;
@@ -59,6 +65,9 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
         break;
       case 'bet:full':
         if (lobby) lobby = { ...lobby, left: Number(msg.left) || 0 };
+        break;
+      case 'bet:closed':
+        if (lobby) lobby = { ...lobby, open: false };
         break;
       case 'start': {
         challengeId = msg.challenge?.id ?? challengeId;
@@ -105,12 +114,13 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
     balance: () => wallet.balance,
 
     /**
-     * Поставить против игрока. Возвращает: 'sent' | 'offline' | 'closed' | 'repeat' | 'invalid' | 'poor'.
-     * Ответ хоста придёт как guest:msg bet:ok {amount} или bet:full {left}.
+     * Поставить против игрока. Возвращает: 'sent' | 'offline' | 'closed' (ставки закрыты) | 'full' (места нет) |
+     * 'repeat' | 'invalid' | 'poor'. Ответ хоста придёт как guest:msg bet:ok {amount}, bet:full {left} или bet:closed.
      */
     bet(amount) {
       if (status !== 'open' || !link) return 'offline';
-      if (!lobby || !(Number(lobby.left) > 0)) return 'closed';
+      if (!lobby || lobby.open === false) return 'closed';
+      if (!(Number(lobby.left) > 0)) return 'full';
       if (myBet > 0) return 'repeat';
       const a = Number(amount);
       if (!(a > 0)) return 'invalid';
@@ -131,16 +141,20 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
     },
   };
 
-  const clearLost = () => {
-    if (lostTimer != null) timers.clearTimeout?.(lostTimer);
-    lostTimer = null;
-  };
-
-  /** Игрок не вернулся: ставка возвращается, экран получает обычный void (причина left). */
-  function hostGone() {
-    lostTimer = null;
-    if (!wallet.refund(challengeId, 'left')) return;
-    bus.emit('guest:msg', { msg: { t: 'void', reason: 'left' } });
+  /** Хост молчит слишком долго: в раунде возвращаем ставку и говорим экрану, что игрок пропал. */
+  function hostSilent() {
+    if (silentDone) return;
+    silentDone = true;
+    if (wallet.refund(challengeId, 'left')) bus.emit('guest:msg', { msg: { t: 'void', reason: 'left' } });
+    const l = link;
+    link = null;
+    lobby = null;
+    if (status === 'open') setStatus('closed', 'silent');
+    try {
+      l?.close?.(); // связь мертва, освобождаем её
+    } catch {
+      /* уже закрыто */
+    }
   }
 
   const io = {
@@ -150,21 +164,34 @@ export function createGuestCore({ bus, wallet, name, avatar, rng = Math.random, 
     setStatus,
     /** Соединение с игроком открылось: пополнить, если пусто, и представиться. */
     open(l) {
-      clearLost(); // игрок вернулся
       link = l;
+      lastHeard = now();
+      silentDone = false;
       wallet.topUpIfBroke();
       l.send({ t: 'hello', name: me.name, avatar: me.avatar });
       setStatus('open');
     },
     message: onMessage,
-    /** Связь закрылась. left: друг сам ушёл (stop), тогда ничего не ждём. */
-    closed({ left = false } = {}) {
+    /** Связь закрылась (игрок закрыл страницу, пропала сеть или друг сам ушёл). Ставку вернёт тишина или следующий заход. */
+    closed() {
       link = null;
       lobby = null;
-      if (status !== 'error') setStatus('closed');
-      if (left) return clearLost();
-      // короткий обрыв сети раунд не отменяет: возвращаем ставку, только если игрока нет уже MONEY.friend.hostLostMs
-      if (wallet.open.length && lostTimer == null) lostTimer = timers.setTimeout(hostGone, cfg.hostLostMs);
+      if (status !== 'error' && status !== 'closed') setStatus('closed');
+    },
+    /**
+     * Пульс (раз в MONEY.friend.pingMs): ping хосту и проверка, слышно ли его. Возвращает false, когда следить больше
+     * не за чем (связи нет и раунда нет), тогда peer.js останавливает пульс.
+     */
+    tick() {
+      if (link) {
+        try {
+          link.send({ t: 'ping' });
+        } catch {
+          /* канал закрывается, close придёт сам */
+        }
+      }
+      if (lastHeard != null && !silentDone && now() - lastHeard > cfg.hostSilentMs) hostSilent();
+      return Boolean(link) || (wallet.open.length > 0 && !silentDone);
     },
     stream: (stream) => bus.emit('guest:stream', { stream }),
   };

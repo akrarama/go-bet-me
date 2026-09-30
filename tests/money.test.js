@@ -302,6 +302,44 @@ function walletTests(t) {
     a.eq(w.balance, 0);
   });
 
+  t.test('кошелёк: друг ушёл посреди раунда, его ставка выходит из расчёта, комиссии с неё нет', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ stake: 20, bets: [bet('bot-1', 5, { bot: true }), bet('peer:f1', 5, { name: 'Лиса', avatar: '🦊' }), bet('peer:f2', 5)] });
+    w.hold(ch);
+    a.eq(w.balance, 80);
+    a.ok(w.withdraw(ch.id, 'peer:f1'), 'снята');
+    a.eq(w.withdraw(ch.id, 'peer:f1'), null, 'второй раз нечего');
+    a.eq(w.withdraw(ch.id, 'нет-такого'), null);
+    a.eq(w.withdraw('другой-челлендж', 'peer:f2'), null);
+    w.end(finished(ch, true));
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.pool, 10, 'в пуле осталось 5 + 5');
+    a.eq(res.settlement.friends.length, 2);
+    a.eq(res.settlement.creators.fee, 1, 'комиссия только с двух оставшихся ставок');
+    a.eq(w.balance, 80 + 20 + 10 - 1, '20 назад и 10 × 0,9 сверху: ушедший не платит');
+    a.deep(res.round.left, [{ id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5 }]);
+    a.eq(w.withdraw(ch.id, 'peer:f2'), null, 'после расчёта раунд не трогаем');
+    a.eq(res.settlement.friends.some((f) => f.id === 'peer:f1'), false);
+  });
+
+  t.test('кошелёк: друг ушёл после финиша игрока, до итогов, тоже выходит; при отмене возврат без него', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ stake: 10, bets: [bet('peer:f1', 5), bet('bot-1', 5, { bot: true })] });
+    w.hold(ch);
+    w.end(finished(ch, false));
+    a.ok(w.withdraw(ch.id, 'peer:f1'), 'статус ended: ещё можно');
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.pool, 5);
+    a.eq(res.settlement.friends.length, 1);
+    a.eq(w.balance, 90, 'проиграл 10');
+    const c2 = challenge({ stake: 10, bets: [bet('peer:f1', 5), bet('bot-1', 5, { bot: true })] });
+    w.hold(c2);
+    w.withdraw(c2.id, 'peer:f1');
+    const back = w.refund('camera', c2.id);
+    a.eq(back.settlement.friends.length, 1, 'в возврате только оставшиеся');
+    a.eq(w.balance, 90);
+  });
+
   t.test('кошелёк: обычная ставка не урезается', (a) => {
     const w = createWallet({ storage: memory() });
     const round = w.hold(challenge({ stake: 10 }));
@@ -655,6 +693,23 @@ function screensTests(t) {
   t.test('итоги: ошибки чаще выше, нулевые не показываем', (a) => {
     const items = faultItems([{ code: 'a', text: 'наклон спины вперёд', count: 1 }, { code: 'b', text: 'недостаточная глубина', count: 3 }, { code: 'c', text: 'x', count: 0 }]);
     a.deep(items.map((i) => i.text), ['3 × недостаточная глубина', '1 × наклон спины вперёд']);
+  });
+
+  t.test('итоги: друг, ушедший до финиша, строкой «ушёл, ставка возвращена» с нулём', (a) => {
+    const st = settle({ stake: 10, bets: [bet('bot-1', 5, { bot: true })], success: true });
+    const left = [{ id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5 }];
+    const rows = ledgerRows(st, { avatar: '🏋️', left });
+    a.deep(rows.map((r) => r.name), ['Ты', 'bot-1', 'Лиса', 'Приложение']);
+    const gone = rows[2];
+    a.eq(gone.detail, RESULT_TEXT.left);
+    a.eq(gone.detail, 'ушёл, ставка возвращена');
+    a.eq(gone.delta, 0);
+    a.eq(gone.kind, 'friend');
+    const solo = settle({ stake: 10, bets: [], success: false });
+    const soloRows = ledgerRows(solo, { left });
+    a.deep(soloRows.map((r) => r.name), ['Ты', 'Лиса'], 'все ушли: ставок в пуле нет, но уход виден');
+    a.deep(ledgerRows(st, {}).map((r) => r.name), ['Ты', 'bot-1', 'Приложение'], 'без ушедших как раньше');
+    a.ok(!/[—–]/.test(RESULT_TEXT.left));
   });
 
   t.test('итоги: строка под заголовком', (a) => {
