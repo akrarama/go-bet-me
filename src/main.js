@@ -144,10 +144,7 @@ async function boot() {
   ui.loader.show('Проверяю аккаунт');
   // Модель жестов (несколько МБ + wasm) не зависит от входа: качаем её, пока человек вводит логин и пароль.
   // Тогда после регистрации остаётся только включить камеру.
-  if (!JOIN_ID) {
-    vision.start();
-    vision.use('gesture');
-  }
+ 
   if (!JOIN_ID && await requireAccount()) return;
   const ctx = makeContext();
   app.init(ctx);
