@@ -6,6 +6,7 @@
 //   live:end    end()     результат запомнен
 //   RESULT      settle()  расчёт применяется один раз, игроку выплата
 //   live:void   refund()  ставка вернулась
+//   bet:withdrawn withdraw()  друг по ссылке ушёл посреди раунда: его ставка выходит из расчёта
 // Раунд, который не дошёл до конца (перезагрузка страницы, уход с LIVE клавишами отладки),
 // закрывается сам: не доиграли → возврат, доиграли → расчёт. Так баланс всегда сходится.
 //
@@ -176,6 +177,21 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
       return r.settlement ? { round: r, settlement: r.settlement } : null;
     },
 
+    /**
+     * bet:withdrawn: друг ушёл посреди раунда. Его ставка выходит из расчёта (ни выплаты, ни комиссии), а запись
+     * остаётся в round.left: на итогах видно «ушёл, ставка возвращена». Уже рассчитанный раунд не трогаем.
+     */
+    withdraw(challengeId, betId) {
+      const r = latest(challengeId);
+      if (!r || (r.status !== 'held' && r.status !== 'ended')) return null;
+      const i = r.bets.findIndex((b) => b.id === betId);
+      if (i < 0) return null;
+      const [bet] = r.bets.splice(i, 1);
+      (r.left ??= []).push({ id: bet.id, name: bet.name, avatar: bet.avatar, amount: bet.amount });
+      save();
+      return bet;
+    },
+
     /** live:void: вернуть ставку. Доигранный раунд не отменяется: его результат уже есть. */
     refund(reason = 'void', challengeId = null) {
       const r = this.open;
@@ -324,6 +340,7 @@ export const wallet = {
     ctx.bus.on('live:start', ({ challenge }) => w.hold(challenge));
     ctx.bus.on('live:end', ({ session }) => w.end(session));
     ctx.bus.on('live:void', ({ challenge, reason }) => w.refund(reason ?? 'void', challenge?.id ?? null));
+    ctx.bus.on('bet:withdrawn', ({ bet, challenge }) => w.withdraw(challenge?.id, bet?.id)); // друг по ссылке ушёл посреди раунда
     // Ушли с LIVE: доиграли → расчёт (RESULT обычно уже сделал его сам в enter),
     // не доиграли и не отмена (так бывает только с клавишами отладки) → возврат
     ctx.bus.on('state', ({ from, to }) => {

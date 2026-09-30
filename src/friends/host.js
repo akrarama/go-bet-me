@@ -5,7 +5,9 @@
 // Слушает шину: state, bet, live:start, count, fault, rejected, live:end, live:void.
 // Шлёт в шину: friend:join {id, name, avatar}, friend:leave {id}, bet {bet, challenge} (ставка друга,
 //   bet.id = 'peer:<id>', bot = false), bet:cancel {bet, challenge} (друг ушёл из LOBBY, его ставка снята),
+//   bet:withdrawn {bet, challenge, reason} (друг ушёл посреди LIVE: ставка выходит из расчёта, без выплаты и комиссии),
 //   comment {from, text, avatar} (реакция друга в ленту).
+// Пульс: tick() зовёт peer.js раз в MONEY.friend.pingMs: шлёт ping и отключает друга, если он молчит friendSilentMs.
 //
 // Деньги: ставка друга это обычная запись в challenge.bets, её берёт в расчёт тот же money.settle,
 // что и для ботов. Друг платит на своём устройстве (guest-wallet.js), здесь только считаем и сообщаем итог.
@@ -39,9 +41,23 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
 
   // ─── Что видит друг ───────────────────────────────────────────
 
+  // когда друг видит экран ставок: сам LOBBY и краткие остановки рядом с ним
+  const LOBBY_LIKE = new Set(['LOBBY', 'LIVENESS', 'SETUP']);
+  const noteOf = () => (app.state === 'LIVENESS' ? 'starting' : app.state === 'SETUP' ? 'setup' : null);
+  // до Старта ставку ушедшего друга ещё можно просто снять
+  const beforeStart = () => !round && (app.state === 'LOBBY' || app.state === 'LIVENESS' || app.state === 'LIVE');
+
   function lobbyMsg(f) {
     const ch = app.challenge;
-    return { t: 'lobby', challenge: pubChallenge(ch), left: poolLeft(ch), bets: pubBets(ch.bets), you: { amount: betOf(f)?.amount ?? 0 } };
+    return {
+      t: 'lobby',
+      challenge: pubChallenge(ch),
+      left: poolLeft(ch),
+      bets: pubBets(ch.bets),
+      you: { amount: betOf(f)?.amount ?? 0 },
+      open: isLobby(), // ставки идут только пока игрок в LOBBY
+      note: noteOf(), // 'starting' | 'setup' | null
+    };
   }
 
   function startMsg(f) {
@@ -49,14 +65,14 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
   }
 
   function broadcastLobby() {
-    if (!isLobby() || !app.challenge) return;
+    if (!LOBBY_LIKE.has(app.state) || !app.challenge) return;
     joined().forEach((f) => send(f, lobbyMsg(f)));
   }
 
   /** Друг заглянул: показать ему то, что происходит сейчас. */
   function syncTo(f) {
     if (round) return startFor(f);
-    if (isLobby() && app.challenge) send(f, lobbyMsg(f));
+    if (LOBBY_LIKE.has(app.state) && app.challenge) send(f, lobbyMsg(f));
   }
 
   // ─── Соединения ───────────────────────────────────────────────
@@ -80,7 +96,7 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
         /* уже закрыто */
       }
     }
-    friends.set(id, { id, link, joined: old?.joined ?? false, name: old?.name ?? '', avatar: old?.avatar ?? '', lastReactAt: -Infinity, call: null });
+    friends.set(id, { id, link, joined: old?.joined ?? false, name: old?.name ?? '', avatar: old?.avatar ?? '', lastReactAt: -Infinity, lastHeard: now(), call: null });
     return true;
   }
 
@@ -90,11 +106,21 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
     if (!f || f.link !== link) return;
     friends.delete(id);
     closeCall(f);
-    if (f.joined) {
-      const bet = isLobby() || app.state === 'LIVENESS' ? cancelBet(f) : null;
-      bus.emit('friend:leave', { id });
-      if (bet && isLobby()) broadcastLobby();
-    }
+    if (!f.joined) return;
+    // ушёл до финиша: до Старта его ставка снимается, посреди LIVE выходит из расчёта (без выплаты и комиссии)
+    const cancelled = beforeStart() ? cancelBet(f) : null;
+    if (round) withdrawFromRound(f);
+    bus.emit('friend:leave', { id });
+    if (cancelled && isLobby()) broadcastLobby();
+  }
+
+  /** Друг ушёл посреди LIVE: ставка снимается со снимка расчёта, кошелёк игрока и экран итогов узнают из события. */
+  function withdrawFromRound(f) {
+    const i = round.bets.findIndex((b) => b.id === betId(f.id));
+    if (i < 0) return null;
+    const [bet] = round.bets.splice(i, 1);
+    bus.emit('bet:withdrawn', { bet: { ...bet }, challenge: round.challenge, reason: 'left' });
+    return bet;
   }
 
   /** Друг ушёл до Старта: его ставка снимается, место в пуле освобождается. */
@@ -125,8 +151,10 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
   /** Пришло от друга: строка JSON или уже объект. Проверяем всё, чужие данные ничему не доверяем. */
   function receive(id, data) {
     const f = friends.get(id);
+    if (f) f.lastHeard = now(); // любое сообщение = друг жив
     const msg = f ? parseFriendMsg(parseWire(data)) : null;
     if (!f || !msg) return;
+    if (msg.t === 'ping') return;
     if (msg.t === 'hello') return onHello(f, msg);
     if (!f.joined) return; // без hello ничего не принимаем
     if (msg.t === 'bet') return onBet(f, msg);
@@ -145,7 +173,7 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
 
   function onBet(f, msg) {
     const ch = app.challenge;
-    if (!isLobby() || !ch) return send(f, { t: 'bet:full', left: 0 });
+    if (!isLobby() || !ch) return send(f, { t: 'bet:closed' }); // ставки закрыты (Старт, настройки), это не «пул полон»
     const prev = betOf(f);
     if (prev) return send(f, { t: 'bet:ok', amount: prev.amount }); // одна ставка на друга: ещё раз тот же ответ
     const left = poolLeft(ch);
@@ -257,12 +285,28 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
 
   function onState({ from, to } = {}) {
     if (from === 'LOBBY' && to !== 'LOBBY') prune(); // Старт: ставки закрыты, остаются те, кто на связи
-    if (to === 'LOBBY') broadcastLobby();
+    if (LOBBY_LIKE.has(to)) broadcastLobby(); // друзья узнают: ставки идут / игрок стартует / игрок в настройках
     if (from === 'LIVE' && round && to !== 'VOID') onVoid({ reason: 'left' }); // ушли с LIVE, не доиграв (отладка)
   }
 
   function onBusBet({ challenge } = {}) {
     if (challenge?.id && challenge.id === app.challenge?.id) broadcastLobby();
+  }
+
+  /** Пульс (раз в MONEY.friend.pingMs): ping живым друзьям, а кто молчит friendSilentMs, того отключаем. */
+  function tick() {
+    const t = now();
+    for (const f of [...friends.values()]) {
+      if (t - f.lastHeard > cfg.friendSilentMs) {
+        const link = f.link;
+        detach(f.id, link);
+        try {
+          link.close?.();
+        } catch {
+          /* уже закрыто */
+        }
+      } else if (f.joined) send(f, { t: 'ping' });
+    }
   }
 
   const offs = [
@@ -292,6 +336,7 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
     },
     /** Разослать друзьям состояние LOBBY (после смены челленджа). */
     broadcastLobby,
+    tick,
     dispose() {
       offs.forEach((off) => off());
       friends.forEach((f) => {

@@ -300,6 +300,13 @@ export default function friendsTests(t) {
     a.eq(parseFriendMsg([]), null);
   });
 
+  t.test('друг: ping и bet:closed входят в протокол в обе стороны', (a) => {
+    a.deep(parseFriendMsg({ t: 'ping', extra: 1 }), { t: 'ping' });
+    a.ok(parseHostMsg({ t: 'ping' }));
+    a.ok(parseHostMsg({ t: 'bet:closed' }));
+    a.deep(parseWire('{"t":"ping"}'), { t: 'ping' });
+  });
+
   t.test('друг: parseHostMsg знает только сообщения хоста', (a) => {
     for (const m of ['lobby', 'bet:ok', 'bet:full', 'start', 'count', 'fault', 'rejected', 'end', 'void']) a.ok(parseHostMsg({ t: m }), m);
     a.eq(parseHostMsg({ t: 'hello' }), null);
@@ -518,7 +525,7 @@ export default function friendsTests(t) {
       const f = r.friend('f1');
       r.go(state);
       r.say('f1', { t: 'bet', amount: 5 });
-      a.deep(f.last('bet:full'), { t: 'bet:full', left: 0 }, state);
+      a.deep(f.last('bet:closed'), { t: 'bet:closed' }, state);
       a.eq(r.app.challenge.bets.length, 0, state);
     }
   });
@@ -615,6 +622,115 @@ export default function friendsTests(t) {
     a.eq(r.core.watching, 0);
   });
 
+  t.test('хост: lobby знает, идут ли ставки: LOBBY открыт, LIVENESS «стартует», SETUP «в настройках»', (a) => {
+    const r = hostRig({ state: 'LOBBY' });
+    const f = r.friend('f1');
+    const lob = f.last('lobby');
+    a.deep([lob.open, lob.note], [true, null], 'в LOBBY ставки идут');
+    r.go('LIVENESS');
+    a.deep([f.last('lobby').open, f.last('lobby').note], [false, 'starting'], 'игрок стартует: ставки закрыты на секунды');
+    a.eq(f.of('lobby').length, 2);
+    r.go('LOBBY'); // проверка живости не прошла, вернулись
+    a.deep([f.last('lobby').open, f.last('lobby').note], [true, null]);
+    r.app.challenge = challengeOf({ id: 'c2' });
+    r.go('SETUP');
+    a.deep([f.last('lobby').open, f.last('lobby').note], [false, 'setup'], 'игрок вернулся в настройки');
+    a.eq(f.last('lobby').challenge.id, 'c2');
+    const n = f.sent.length;
+    r.go('RESULT');
+    r.go('IDLE');
+    a.eq(f.sent.length, n, 'на итогах и в начале друга лобби не дёргаем');
+    const late = r.friend('f2');
+    a.eq(late.of('lobby').length, 0, 'пришёл, когда игрок в IDLE: ждёт');
+    r.go('SETUP');
+    a.deep([late.last('lobby').open, late.last('lobby').note], [false, 'setup']);
+  });
+
+  t.test('хост: пульс шлёт ping тем, кто представился, а любое сообщение друга = жив', (a) => {
+    const r = hostRig();
+    const f1 = r.friend('f1');
+    const quiet = fakeLink();
+    r.core.attach('f2', quiet); // подключился, но hello не сказал
+    r.t = 5000;
+    r.core.tick();
+    a.deep(f1.last('ping'), { t: 'ping' });
+    a.eq(quiet.of('ping').length, 0, 'без hello пульс не шлём');
+    r.t = 10000;
+    r.say('f1', { t: 'ping' });
+    r.t = 20000; // f1 слышали 10 с назад, f2 молчит 20 с
+    r.core.tick();
+    a.eq(r.core.watching, 1, 'f1 жив');
+    a.eq(quiet.closed, 1, 'молчун без hello отключён');
+    a.eq(MONEY.friend.friendSilentMs, 15000);
+    r.say('f1', 'мусор, но это тоже сообщение');
+    r.t = 34000;
+    r.core.tick();
+    a.eq(r.core.watching, 1, 'мусор тоже считается признаком жизни (14 с)');
+    r.t = 35001;
+    r.core.tick();
+    a.eq(r.core.watching, 0, 'через 15 с тишины друг отключён');
+    a.deep(r.bus.of('friend:leave'), [{ id: 'f1' }]);
+    a.eq(f1.closed, 1);
+  });
+
+  t.test('хост: друг-призрак в LOBBY, его ставка снята; во время проверки и до Старта тоже', (a) => {
+    for (const state of ['LOBBY', 'LIVENESS', 'LIVE']) {
+      const r = hostRig({ bets: [BOT('Дима')] });
+      const f = r.friend('f1');
+      r.say('f1', { t: 'bet', amount: 5 });
+      a.eq(r.app.challenge.bets.length, 2, state);
+      if (state !== 'LOBBY') r.go(state);
+      r.t = MONEY.friend.friendSilentMs + 1;
+      r.core.tick();
+      a.deep(r.app.challenge.bets.map((b) => b.id), ['bot-Дима'], `${state}: ставка призрака снята`);
+      a.eq(r.bus.of('bet:cancel').length, state === 'LOBBY' ? 1 : 0, `${state}: экран LOBBY уведомлён только когда он открыт`);
+      a.eq(r.bus.of('bet:withdrawn').length, 0, `${state}: раунда ещё нет, выходить не откуда`);
+      a.eq(f.closed, 1);
+    }
+  });
+
+  t.test('хост: друг ушёл посреди LIVE, его ставка выходит из расчёта, а кошелёк игрока и итоги узнают из события', (a) => {
+    for (const how of ['close', 'silence']) {
+      const r = hostRig({ stake: 20, bets: [BOT('Дима')] });
+      const f1 = r.friend('f1', 'Лиса', '🦊');
+      const f2 = r.friend('f2', 'Тигр', '🐯');
+      r.say('f1', { t: 'bet', amount: 5 });
+      r.say('f2', { t: 'bet', amount: 5 });
+      r.start();
+      a.eq(r.core.round.bets.length, 3);
+      r.t = 3000;
+      r.say('f2', { t: 'ping' });
+      if (how === 'close') r.core.detach('f1', f1);
+      else {
+        r.t = MONEY.friend.friendSilentMs + 1;
+        r.say('f2', { t: 'ping' });
+        r.core.tick();
+      }
+      a.deep(r.core.round.bets.map((b) => b.id), ['bot-Дима', 'peer:f2'], `${how}: из расчёта выпал только ушедший`);
+      const ev = r.bus.of('bet:withdrawn');
+      a.eq(ev.length, 1, how);
+      a.eq(ev[0].bet.id, 'peer:f1');
+      a.eq(ev[0].bet.amount, 5);
+      a.eq(ev[0].challenge.id, 'c1');
+      a.eq(ev[0].reason, 'left');
+      a.deep(r.bus.of('friend:leave'), [{ id: 'f1' }]);
+      a.eq(r.app.challenge.bets.length, 3, 'сам челлендж не трогаем: экран LIVE уже идёт');
+      r.end(false);
+      a.eq(f2.last('end').you.delta, 4.5, `${how}: оставшемуся другу расчёт как обычно`);
+      a.eq(f1.of('end').length, 0, 'ушедшему итог не шлём');
+    }
+  });
+
+  t.test('хост: друг без ставки ушёл посреди LIVE, расчёт не меняется', (a) => {
+    const r = hostRig({ bets: [BOT('Дима')] });
+    const spec = r.friend('spec');
+    r.start();
+    r.core.detach('spec', spec);
+    a.eq(r.bus.of('bet:withdrawn').length, 0);
+    a.deep(r.bus.of('friend:leave'), [{ id: 'spec' }]);
+    a.eq(r.core.round.bets.length, 1);
+  });
+
   // ── Хост: LIVE ──
   t.test('хост: Старт, ход и ошибки идут друзьям, видео звонит каждому один раз', (a) => {
     const r = hostRig({ bets: [BOT('Дима')] });
@@ -664,7 +780,7 @@ export default function friendsTests(t) {
     r.say('late', { t: 'hello' });
     a.eq(late.calls.length, 1, 'повторный hello не звонит второй раз');
     r.say('late', { t: 'bet', amount: 5 });
-    a.deep(late.last('bet:full'), { t: 'bet:full', left: 0 });
+    a.deep(late.last('bet:closed'), { t: 'bet:closed' });
   });
 
   t.test('хост: до Старта и после финиша счёт и ошибки друзьям не шлются', (a) => {
@@ -755,16 +871,19 @@ export default function friendsTests(t) {
   t.test('хост: новый LOBBY рассылает друзьям свежий пул, dispose всё закрывает', (a) => {
     const r = hostRig({ state: 'SETUP' });
     const f = r.friend('f1');
-    a.eq(f.of('lobby').length, 0, 'вне LOBBY друг ждёт');
+    a.eq(f.of('lobby').length, 1, 'в настройках друг тоже видит, что происходит');
+    a.deep([f.last('lobby').open, f.last('lobby').note], [false, 'setup']);
     r.app.challenge = challengeOf({ id: 'c2', stake: 20 });
     r.go('LOBBY');
     a.eq(f.last('lobby').challenge.id, 'c2');
     a.eq(f.last('lobby').left, 20);
+    a.deep([f.last('lobby').open, f.last('lobby').note], [true, null]);
     r.core.dispose();
     a.eq(f.closed, 1);
+    const n = f.sent.length;
     r.bus.emit('count', { count: 1 });
     r.go('LOBBY');
-    a.eq(f.of('lobby').length, 1, 'после dispose тишина');
+    a.eq(f.sent.length, n, 'после dispose тишина');
   });
 
   // ── Гость ──
@@ -816,7 +935,7 @@ export default function friendsTests(t) {
     r.msg({ t: 'lobby', challenge: { id: 'c1' }, left: 5, bets: [], you: { amount: 0 } });
     r.msg({ t: 'bet:full', left: 0 });
     a.eq(r.api.lobby.left, 0);
-    a.eq(r.api.bet(5), 'closed');
+    a.eq(r.api.bet(5), 'full', 'пул полон это не «ставки закрыты»');
     a.eq(r.api.myBet, 0);
   });
 
@@ -875,6 +994,34 @@ export default function friendsTests(t) {
     a.eq(second.api.balance(), 100);
   });
 
+  t.test('гость: кредиты кончились, на каждом lobby пополнение до 100 и событие topup', (a) => {
+    const r = guestRig();
+    r.msg({ t: 'start', challenge: { id: 'x' }, bets: [{ id: 'peer:me1', amount: 100 }], you: { amount: 100 } });
+    r.msg({ t: 'end', success: true, you: { amount: 100, delta: -100 } });
+    a.eq(r.api.balance(), 0, 'проиграл всё');
+    r.msg({ t: 'lobby', challenge: { id: 'c2' }, left: 10, bets: [], you: { amount: 0 }, open: true, note: null });
+    a.eq(r.api.balance(), 100, 'новый lobby: пополнили');
+    a.deep(r.bus.of('guest:wallet').at(-1), { balance: 100, delta: 100, reason: 'topup' });
+    const before = r.bus.of('guest:wallet').length;
+    r.msg({ t: 'lobby', challenge: { id: 'c2' }, left: 5, bets: [], you: { amount: 0 }, open: true, note: null });
+    a.eq(r.bus.of('guest:wallet').length, before, 'хватает кредитов: молчим');
+  });
+
+  t.test('гость: ставки закрыты (bet:closed или open=false) это не «пул полон»', (a) => {
+    const r = guestRig();
+    r.msg({ t: 'lobby', challenge: { id: 'c1' }, left: 10, bets: [], you: { amount: 0 }, open: false, note: 'starting' });
+    a.eq(r.api.lobby.note, 'starting');
+    a.eq(r.api.bet(5), 'closed', 'игрок стартует');
+    r.msg({ t: 'lobby', challenge: { id: 'c1' }, left: 10, bets: [], you: { amount: 0 }, open: true, note: null });
+    a.eq(r.api.bet(5), 'sent');
+    r.msg({ t: 'bet:closed' });
+    a.eq(r.api.lobby.open, false);
+    a.eq(r.api.bet(5), 'closed');
+    a.deep(r.bus.of('guest:msg').at(-1), { msg: { t: 'bet:closed' } });
+    r.msg({ t: 'lobby', challenge: { id: 'c1' }, left: 0, bets: [], you: { amount: 0 }, open: true, note: null });
+    a.eq(r.api.bet(5), 'full', 'ставки идут, но места нет');
+  });
+
   t.test('гость: реакции не чаще и не пустые, мусор от хоста не роняет', (a) => {
     let time = 0;
     const bus = miniBus();
@@ -907,53 +1054,71 @@ export default function friendsTests(t) {
     a.deep(e.bus.of('guest:status').at(-1), { status: 'error', error: 'peer-unavailable' });
   });
 
-  t.test('гость: игрок пропал посреди раунда и не вернулся за 30 с, ставка возвращается и экран получает void', (a) => {
-    const timers = { q: [], setTimeout: (fn, ms) => timers.q.push({ fn, ms, live: true }), clearTimeout: (id) => id && (timers.q[id - 1].live = false) };
+  t.test('гость: хост молчит 20 с посреди раунда, ставка возвращается и экран получает void', (a) => {
+    let time = 0;
     const bus = miniBus();
     const wallet = createGuestWallet({ storage: memoryStorage() });
-    const { api, io } = createGuestCore({ bus, wallet, timers, rng: () => 0 });
+    const { api, io } = createGuestCore({ bus, wallet, now: () => time });
     const sent = [];
+    let closed = 0;
     io.setPeerId('me1');
-    io.open({ send: (m) => sent.push(m) });
+    io.open({ send: (m) => sent.push(m), close: () => (closed += 1) });
     io.message({ t: 'start', challenge: { id: 'c1' }, bets: [{ id: 'peer:me1', amount: 10 }], you: { amount: 10 } });
     a.eq(api.balance(), 90);
-    io.closed(); // связь оборвалась посреди раунда
-    a.eq(timers.q.length, 1);
-    a.eq(timers.q[0].ms, MONEY.friend.hostLostMs);
-    a.eq(MONEY.friend.hostLostMs, 30000);
-    a.eq(api.balance(), 90, 'сразу ставку не возвращаем: сеть могла моргнуть');
-    a.eq(bus.of('guest:msg').filter((m) => m.msg.t === 'void').length, 0);
-    timers.q[0].fn();
-    a.eq(api.balance(), 100, 'через 30 с ставка вернулась');
+    time = 5000;
+    a.eq(io.tick(), true);
+    a.deep(sent.at(-1), { t: 'ping' }, 'каждые 5 с ping хосту');
+    time = MONEY.friend.hostSilentMs; // ровно столько: ещё терпим
+    io.tick();
+    a.eq(api.balance(), 90);
+    a.eq(MONEY.friend.hostSilentMs, 20000);
+    time = MONEY.friend.hostSilentMs + 1;
+    a.eq(io.tick(), false, 'следить больше не за чем');
+    a.eq(api.balance(), 100, 'ставка вернулась');
     a.deep(bus.of('guest:msg').at(-1), { msg: { t: 'void', reason: 'left' } });
     a.deep(bus.of('guest:wallet').at(-1), { balance: 100, delta: 10, reason: 'refund' });
+    a.deep(bus.of('guest:status').at(-1), { status: 'closed', error: 'silent' });
+    a.eq(closed, 1, 'мёртвую связь закрываем');
+    a.eq(api.status, 'closed');
+    io.closed(); // и настоящее закрытие приходит следом
+    a.eq(bus.of('guest:status').filter((x) => x.status === 'closed').length, 1, 'событие closed одно');
     io.message({ t: 'end', success: false, you: { amount: 10, delta: 9 } });
     a.eq(api.balance(), 100, 'запоздавший итог возвращённое не рассчитывает');
   });
 
-  t.test('гость: связь вернулась раньше срока, раунд не отменяется; без раунда и после итога таймера нет', (a) => {
-    const timers = { q: [], setTimeout: (fn, ms) => timers.q.push({ fn, ms, live: true }), clearTimeout: (id) => id && (timers.q[id - 1].live = false) };
+  t.test('гость: любое сообщение хоста = он жив; ping экрану не показываем; без раунда просто связь потеряна', (a) => {
+    let time = 0;
     const bus = miniBus();
     const wallet = createGuestWallet({ storage: memoryStorage() });
-    const { api, io } = createGuestCore({ bus, wallet, timers });
+    const { api, io } = createGuestCore({ bus, wallet, now: () => time });
     io.setPeerId('me1');
-    io.open({ send() {} });
-    io.closed();
-    a.eq(timers.q.length, 0, 'раунда нет: ждать нечего');
-    io.open({ send() {} });
+    io.open({ send() {}, close() {} });
     io.message({ t: 'start', challenge: { id: 'c1' }, bets: [{ id: 'peer:me1', amount: 5 }], you: { amount: 5 } });
-    io.closed();
-    a.eq(timers.q.length, 1);
-    io.open({ send() {} }); // игрок вернулся
-    a.ok(!timers.q[0].live, 'таймер снят');
-    a.eq(api.balance(), 95);
+    for (let i = 1; i <= 6; i++) {
+      time = i * 10000;
+      io.message({ t: 'ping' }); // хост молчит по делу, но пульс идёт
+      a.eq(io.tick(), true, `тик ${i}`);
+    }
+    a.eq(api.balance(), 95, 'пока пульс есть, ставка держится');
+    a.eq(bus.of('guest:msg').filter((m) => m.msg.t === 'ping').length, 0, 'ping экрану не нужен');
+    // раунд закончился: тишина уже ничего не возвращает, но связь потеряна
     io.message({ t: 'end', success: true, you: { amount: 5, delta: -5 } });
-    io.closed();
-    a.eq(timers.q.length, 1, 'после итога раунда нет, таймер не заводим');
-    io.message({ t: 'start', challenge: { id: 'c2' }, bets: [{ id: 'peer:me1', amount: 5 }], you: { amount: 5 } });
-    io.closed({ left: true }); // друг сам закрыл страницу
-    a.eq(timers.q.length, 1, 'ушёл сам: возврат по таймеру не нужен, ставка вернётся при следующем заходе');
-    a.eq(bus.of('guest:msg').filter((m) => m.msg.reason === 'left').length, 0);
+    time += MONEY.friend.hostSilentMs + 1;
+    io.tick();
+    a.eq(api.balance(), 95, 'после итога возвращать нечего');
+    a.eq(bus.of('guest:msg').filter((m) => m.msg.t === 'void').length, 0);
+    a.deep(bus.of('guest:status').at(-1), { status: 'closed', error: 'silent' });
+    // тишина после закрытия связи: следить надо, пока в раунде ставка
+    const wl = createGuestWallet({ storage: memoryStorage() });
+    const g = createGuestCore({ bus: miniBus(), wallet: wl, now: () => time });
+    g.io.setPeerId('me1');
+    g.io.open({ send() {}, close() {} });
+    g.io.message({ t: 'start', challenge: { id: 'c9' }, bets: [{ id: 'peer:me1', amount: 20 }], you: { amount: 20 } });
+    g.io.closed();
+    a.eq(g.io.tick(), true, 'связь закрылась, но ставка ещё держится: ждём срок');
+    time += MONEY.friend.hostSilentMs + 1;
+    g.io.tick();
+    a.eq(g.api.balance(), 100, 'срок вышел: ставка вернулась и после закрытия связи');
   });
 
   // ── Боты и друзья ──
@@ -1146,6 +1311,33 @@ export default function friendsTests(t) {
     });
   });
 
+  t.test('сеть: пульс идёт в обе стороны, пока друг на связи', async (a) => {
+    await withFakeTimers(async ({ fire, queue }) => {
+      const cloud = fakeCloud();
+      const hostBus = miniBus();
+      const app = { state: 'LOBBY', challenge: challengeOf() };
+      const host = installHost({ bus: hostBus, app, ui: null, Peer: cloud.Peer, location: LOC });
+      await flush();
+      a.eq(queue.filter((q) => q.live && q.ms === MONEY.friend.pingMs).length, 0, 'пока друзей нет, пульс не тикает');
+      const guest = createGuest({ hostId: hostBus.of('peer:ready')[0].id, bus: miniBus(), Peer: cloud.Peer, storage: memoryStorage() });
+      guest.connect();
+      await flush();
+      const beats = queue.filter((q) => q.live && q.ms === MONEY.friend.pingMs).length;
+      a.eq(beats, 2, 'после подключения тикают оба пульса (хоста и гостя)');
+      const conn = cloud.created.find((p) => p.id === guest.id).conns[0];
+      const hostConn = [...cloud.peers.values()].find((p) => p.conns.length && p.id !== guest.id).conns[0];
+      fire();
+      await flush();
+      a.ok(hostConn.sent.some((m) => JSON.parse(m).t === 'ping'), 'хост прислал ping');
+      a.ok(conn.sent.some((m) => JSON.parse(m).t === 'ping'), 'друг прислал ping');
+      a.eq(queue.filter((q) => q.live && q.ms === MONEY.friend.pingMs).length, 2, 'пульс продолжается');
+      guest.stop();
+      await flush();
+      host.stop();
+      a.eq(queue.filter((q) => q.live && q.ms === MONEY.friend.pingMs).length, 0, 'после stop пульса нет');
+    });
+  });
+
   t.test('сеть: ссылка не существует или игрок ушёл, друг получает понятную ошибку', async (a) => {
     await withFakeTimers(async () => {
       const cloud = fakeCloud();
@@ -1208,7 +1400,7 @@ export default function friendsTests(t) {
       a.eq(guests[0].g.myBet, 10, 'кто раньше, тот и в пуле');
       a.eq(guests[1].g.myBet, 0);
       a.deep(guests[1].bus.of('guest:msg').filter((m) => m.msg.t === 'bet:full').map((m) => m.msg.left), [0]);
-      a.eq(guests[1].g.bet(5), 'closed', 'теперь друг и сам знает, что места нет');
+      a.eq(guests[1].g.bet(5), 'full', 'теперь друг и сам знает, что места нет');
       a.eq(app.challenge.bets.length, 1);
       a.eq(host.watching, 2);
       host.stop();
