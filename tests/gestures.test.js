@@ -3,7 +3,8 @@
 
 import { GESTURES } from '../src/config.js';
 import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT, createCursorGate, gestures } from '../src/vision/gestures.js';
-import { targetLabel, plural, mss } from '../src/screens/setup.js';
+import { targetLabel, goalChip, goalNote, plural, mss } from '../src/screens/setup.js';
+import { CHALLENGES } from '../src/config.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 import { createFeedback } from '../src/feedback.js';
 import { VERDICT_HINT } from '../src/screens/liveness.js';
@@ -1140,5 +1141,52 @@ export default (t) => {
     // неуверенная ладонь курсор не отнимает
     for (; t < 5000; t += STEP) frame(t, hand('Open_Palm', 0.65));
     a.eq(last().visible, true, 'ладонь с уверенностью 0.65: курсор есть');
+  });
+
+  // ─── SETUP на четыре типа: цели и подписи не зависят от того, есть ли планка в config ──
+
+  const PLANK = { unit: 'секунды', limitSec: 180 }; // как строка планки в config, но тесты не ждут её там
+  const MEDITATION_DEF = { unit: 'секунды', limitSec: null };
+  const SQUAT = { unit: 'повторы', limitSec: 90 };
+
+  t.test('планка: цели «30 секунд / 1 минута / 2 минуты»', (a) => {
+    a.deep(targetLabel('plank', 30, PLANK), { num: '30', unit: 'секунд' });
+    a.deep(targetLabel('plank', 60, PLANK), { num: '1', unit: 'минута' });
+    a.deep(targetLabel('plank', 120, PLANK), { num: '2', unit: 'минуты' });
+  });
+
+  t.test('планка: подпись у цели и чип в LOBBY (лимит, а не «за»)', (a) => {
+    a.eq(goalNote('plank', PLANK), 'Считаются секунды ровной планки. Время:\u00A03:00');
+    a.eq(goalChip('plank', 60, PLANK), '1 минута, лимит 3:00');
+    a.eq(goalChip('plank', 30, PLANK), '30 секунд, лимит 3:00');
+  });
+
+  t.test('подписи остальных типов не изменились', (a) => {
+    a.eq(goalNote('squat', SQUAT), 'Время: 1:30');
+    a.eq(goalNote('pushup', { unit: 'повторы', limitSec: 120 }), 'Время: 2:00');
+    a.eq(goalNote('meditation', MEDITATION_DEF, 3), 'Замри с закрытыми глазами. 3\u00A0нарушения\u00A0=\u00A0провал');
+    a.eq(goalNote('meditation', MEDITATION_DEF, 1), 'Замри с закрытыми глазами. 1\u00A0нарушение\u00A0=\u00A0провал');
+    a.eq(goalNote('squat', { unit: 'повторы', limitSec: null }), '');
+    a.eq(goalNote('несуществующий', undefined), '');
+    a.eq(goalChip('squat', 10, SQUAT), '10 повторов за 1:30');
+    a.eq(goalChip('meditation', 300, MEDITATION_DEF), '5 минут');
+    a.eq(goalChip('meditation', 60, MEDITATION_DEF), '1 минута');
+  });
+
+  t.test('config: у каждого типа есть цели, цель по умолчанию среди них, подписи не пустые (3 типа или 4)', (a) => {
+    const types = Object.keys(CHALLENGES);
+    a.ok(types.length >= 3 && types.length <= 4, `типов ${types.length}: раскладка SETUP рассчитана на 3-4`);
+    for (const type of types) {
+      const def = CHALLENGES[type];
+      a.ok(def.targets.length >= 2 && def.targets.length <= 3, `${type}: целей ${def.targets.length}`);
+      a.ok(def.targets.includes(def.defaultTarget), `${type}: defaultTarget среди targets`);
+      a.ok(def.label && def.emoji, `${type}: название и значок`);
+      for (const n of def.targets) {
+        const { num, unit } = targetLabel(type, n);
+        a.ok(num && unit, `${type} ${n}: подпись кнопки`);
+        a.ok(goalChip(type, n).startsWith(`${num} ${unit}`), `${type} ${n}: чип начинается с цели`);
+      }
+      a.eq(typeof goalNote(type), 'string');
+    }
   });
 };

@@ -25,9 +25,12 @@ export function mss(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Цель для кнопки и сводки: (squat, 10) → { num: '10', unit: 'повторов' }, (meditation, 600) → { num: '10', unit: 'минут' }. */
-export function targetLabel(type, target) {
-  if (CHALLENGES[type]?.unit === 'секунды') {
+/**
+ * Цель для кнопки и сводки: (squat, 10) → { num: '10', unit: 'повторов' }, (meditation, 600) → { num: '10', unit: 'минут' },
+ * (plank, 30) → { num: '30', unit: 'секунд' }. def по умолчанию из config, тесты подсовывают свой.
+ */
+export function targetLabel(type, target, def = CHALLENGES[type]) {
+  if (def?.unit === 'секунды') {
     if (target >= 60 && target % 60 === 0) {
       const m = target / 60;
       return { num: String(m), unit: plural(m, 'минута', 'минуты', 'минут') };
@@ -35,6 +38,20 @@ export function targetLabel(type, target) {
     return { num: String(target), unit: plural(target, 'секунда', 'секунды', 'секунд') };
   }
   return { num: String(target), unit: plural(target, 'повтор', 'повтора', 'повторов') };
+}
+
+/** Цель для чипа в LOBBY: «10 повторов за 1:30» (лимит на повторы), «1 минута, лимит 3:00» (удержание). */
+export function goalChip(type, target, def = CHALLENGES[type]) {
+  const { num, unit } = targetLabel(type, target, def);
+  if (!def?.limitSec) return `${num} ${unit}`;
+  return def.unit === 'секунды' ? `${num} ${unit}, лимит ${mss(def.limitSec)}` : `${num} ${unit} за ${mss(def.limitSec)}`;
+}
+
+/** Подпись у цели: правило или время. Неразрывные пробелы: «3 нарушения = провал» и «Время: 3:00» не рвутся. */
+export function goalNote(type, def = CHALLENGES[type], lives = MEDITATION.lives) {
+  if (type === 'meditation') return `Замри с закрытыми глазами. ${lives}\u00A0${plural(lives, 'нарушение', 'нарушения', 'нарушений')}\u00A0=\u00A0провал`;
+  if (type === 'plank') return `Считаются секунды ровной планки. Время:\u00A0${mss(def?.limitSec ?? 0)}`;
+  return def?.limitSec ? `Время: ${mss(def.limitSec)}` : '';
 }
 
 /** Варианты ставки: на какие не хватает кредитов, те выключены. */
@@ -75,7 +92,7 @@ export default {
         <div class="setup-rows">
           <div class="setup-row">
             <div class="setup-label">Упражнение</div>
-            <div class="setup-options" data-types>${Object.entries(CHALLENGES)
+            <div class="setup-options" data-types data-count="${Object.keys(CHALLENGES).length}">${Object.entries(CHALLENGES)
               .map(([type, def]) => `
               <button class="btn setup-opt setup-opt--type" data-dwell data-type="${type}" aria-pressed="false">
                 <span class="setup-emoji" aria-hidden="true">${esc(def.emoji)}</span><span>${esc(def.label)}</span>
@@ -124,12 +141,7 @@ export default {
       els.targets.dataset.count = def.targets.length; // два варианта делят ряд пополам, три: на трети
       els.targets.classList.toggle('is-fresh', fresh);
       mark(els.targets, 'target', c.target);
-      const lives = MEDITATION.lives;
-      els.targetNote.textContent = def.limitSec
-        ? `Время: ${mss(def.limitSec)}`
-        : c.type === 'meditation'
-          ? `Замри с закрытыми глазами. ${lives}\u00A0${plural(lives, 'нарушение', 'нарушения', 'нарушений')}\u00A0=\u00A0провал` // неразрывные пробелы: «3 нарушения = провал» не рвётся
-          : '';
+      els.targetNote.textContent = goalNote(c.type, def);
     };
 
     const renderStakes = () => {
