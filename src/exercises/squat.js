@@ -92,18 +92,22 @@ export function createView(cfg = REPS.squat) {
  */
 export function createFloor(cfg = REPS.squat) {
   let base = null;
+  let prevY = null;
   let upSince = null;
   let lastT = null;
   return {
     update(y, t) {
       const dt = lastT == null ? 0 : t - lastT;
       lastT = t;
-      if (base == null || y >= base) {
-        base = y;
+      // пол опускается, только если два кадра подряд согласны: одиночный выброс точки не сдвигает линию
+      const low = prevY == null ? y : Math.min(y, prevY);
+      prevY = y;
+      if (base == null || low >= base) {
+        base = low;
         upSince = null;
-        return 0;
       }
       const rise = base - y;
+      if (rise <= 0) return 0;
       if (rise <= cfg.jumpRise) {
         base -= rise * Math.min(1, dt / cfg.floorDriftMs);
         upSince = null;

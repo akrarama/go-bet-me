@@ -215,6 +215,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   let t0 = null;
   let stopped = false;
   let flash = null; // { t, ok }: вспышка у сустава, повтор засчитан или нет
+  let ready = false; // человек хоть раз встал в верхнюю точку: до этого «не видно» не ошибка, а подготовка
 
   const jointsOf = (rule) => (last ? (rule.joints ?? []).map((key) => last.idx[key]).filter((i) => i != null) : []);
   const textOf = (rule, value) => (typeof rule.hint === 'function' ? rule.hint(value, cfg) : rule.hint);
@@ -249,7 +250,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   function track(rule, cond, t) {
     const edge = holds.update(rule.code, cond, t);
-    if (edge === 'on') fire(rule);
+    if (edge === 'on' && (rule !== VISIBILITY || ready)) fire(rule);
     else if (edge === 'off') feedback?.clear(rule.code);
   }
 
@@ -289,7 +290,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1;
     const pick = lm ? pickSide(lm, def.sideKeys) : null;
     const seen = pick != null && visible(lm, def.visible.map((key) => pick.idx[key]), REPS.minVisibility);
-    seenHint = lm ? VISIBILITY.hint : NOBODY_HINT;
+    if (!holds.active(VISIBILITY.code)) seenHint = lm ? VISIBILITY.hint : NOBODY_HINT; // текст не мигает, пока висит
     track(VISIBILITY, !seen, t);
     if (!seen) return; // счёт на паузе
 
@@ -313,6 +314,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     gateFrames = 0;
 
     const events = counter.update(m.angle, t);
+    ready ||= counter.armed;
     if (events.some((e) => e.type === 'start')) attempt = [];
     for (const rule of def.rules) {
       const on = !rule.when || rule.when(m, cfg, counter);

@@ -653,7 +653,7 @@ export default (t) => {
   t.test('подсказка в упражнении: суставы правила красные, после исправления гаснут', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 20));
     a.eq(s.feedback.current?.text, 'Таз провисает, напряги живот, выровняй тело');
     a.deep([...s.feedback.highlight], [23]);
     s.feed(hold(pushupPose(TOP), 70));
@@ -664,7 +664,7 @@ export default (t) => {
   t.test('приоритет: видимость важнее формы', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 20));
     a.eq(s.feedback.current?.code, 'hip_sag');
     s.feed(hold(pushupPose({ ...TOP, sag: 0.07, vis: 0.3, farVis: 0.2 }), 12));
     a.eq(s.feedback.current?.code, 'visibility');
