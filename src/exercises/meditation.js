@@ -10,11 +10,12 @@
 // 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть). count ≥ цели: done.
 // Пороги: config.MEDITATION. Контракт контроллера: см. squat.js. Картинка поверх видео: meditation-view.js.
 // До отсчёта экран LIVE зовёт ready(frame): «Встань в позицию», две галочки (лицо в кадре, в кадре только ты).
-// Отладка (?debug=1): e глаза авто/закрыты/открыты, n дёрнуть головой, l лицо пропало, y второе лицо.
+// Отладка (?debug=1): k виртуальное лицо (без человека в кадре), e глаза авто/закрыты/открыты, n дёрнуть головой,
+//   l лицо пропало, y второе лицо. Клавиши меняют данные лица кадра, поэтому без лица и без k они ничего не покажут.
 
 import { MEDITATION as M } from '../config.js';
 import { ema } from '../vision/geometry.js';
-import { blink, nose, noseTracker, primaryIndex, shiftW } from '../vision/face.js';
+import { blink, nose, noseTracker, primaryIndex, shiftW, syntheticFace } from '../vision/face.js';
 import { createView } from './meditation-view.js';
 
 /**
@@ -32,6 +33,12 @@ export const RULES = [
 ];
 
 const INTRO = 'Закрой глаза и замри';
+// «Встань в позицию»: что сделать для непройденной галочки
+const READY_HINTS = {
+  none: 'Лица не видно: сядь напротив камеры, лицо по центру, свет на лицо',
+  edge: 'Лицо у края кадра: сдвинься к центру',
+  crowd: 'В кадре второй человек: пусть отойдёт, ты должен быть один',
+};
 const FRESH = 10; // добавка к приоритету свежего нарушения: выше любого правила
 const round1 = (v) => Math.round(v * 10) / 10;
 
@@ -234,24 +241,23 @@ export function createController({ challenge, bus, feedback, debug }) {
 
     /**
      * «Встань в позицию» до отсчёта: лицо в кадре (нос внутри кадра) и в кадре только ты.
+     * У непройденной галочки есть hint (что сделать), верхний hint = подсказка первой непройденной, null, если все ✓.
      * Чистая проверка: без событий, подсказок и счёта, работает и до start().
      */
     ready(frame) {
       const faces = peekFaces(frame?.face);
       const face = faces.length > 0 && inFrame(nose(faces[primaryIndex(faces)]));
       const alone = faces.length === 1;
-      return {
-        ok: face && alone,
-        checks: [
-          { id: 'face', text: 'Лицо в кадре', ok: face },
-          { id: 'alone', text: 'В кадре только ты', ok: alone },
-        ],
-      };
+      const checks = [
+        { id: 'face', text: 'Лицо в кадре', ok: face, ...(face ? {} : { hint: faces.length ? READY_HINTS.edge : READY_HINTS.none }) },
+        { id: 'alone', text: 'В кадре только ты', ok: alone, ...(alone || !faces.length ? {} : { hint: READY_HINTS.crowd }) },
+      ];
+      return { ok: face && alone, checks, hint: checks.find((chk) => !chk.ok)?.hint ?? null };
     },
 
     /** Своя отрисовка поверх видео (экран LIVE зовёт её вместо скелета, и во время отсчёта тоже). */
     draw(frame, d) {
-      if (!c.faceData || c.faceData.t !== frame.face?.t) c.faceData = simulate(frame.face, frame.t);
+      if (!c.faceData || c.faceData.t !== (sim.virtual ? frame.t : frame.face?.t)) c.faceData = simulate(frame.face, frame.t);
       view.draw(frame, d, c);
     },
 
@@ -289,6 +295,7 @@ export function createController({ challenge, bus, feedback, debug }) {
   }
 
   current = c;
+  sim.virtual = false;
   sim.eyes = 'auto';
   sim.lost = false;
   sim.second = false;
@@ -304,7 +311,9 @@ let current = null; // контроллер, который сейчас на э
 
 /** Контроллер медитации, который сейчас на экране (для отладки в консоли), или null. */
 export const active = () => current;
-const sim = { eyes: 'auto', lost: false, second: false, jolt: false, joltFrom: -Infinity };
+const sim = { virtual: false, eyes: 'auto', lost: false, second: false, jolt: false, joltFrom: -Infinity };
+const OPEN_LEVEL = 0.05; // моргание виртуального лица: глаза открыты
+const CLOSED_LEVEL = 0.9; // и закрыты
 const JOLT_MS = 1200;
 let keysReady = false;
 
@@ -312,9 +321,10 @@ function debugKeys(debug) {
   if (keysReady) return;
   keysReady = true;
   const EYES = ['auto', 'closed', 'open'];
-  const show = () => debug.set('подмена лица', `глаза ${sim.eyes}${sim.lost ? ', лица нет' : ''}${sim.second ? ', второе лицо' : ''}`);
+  const show = () => debug.set('подмена лица', `${sim.virtual ? 'виртуальное лицо, ' : ''}глаза ${sim.eyes}${sim.lost ? ', лица нет' : ''}${sim.second ? ', второе лицо' : ''}`);
   // клавиши глобальные: работают, только пока на экране LIVE идёт медитация
   const key = (k, fn, label) => debug.key(k, () => current && (fn(), show()), label);
+  key('k', () => (sim.virtual = !sim.virtual), 'медитация: виртуальное лицо (без человека в кадре) вкл/выкл');
   key('e', () => (sim.eyes = EYES[(EYES.indexOf(sim.eyes) + 1) % EYES.length]), 'медитация: глаза авто / закрыты / открыты');
   key('n', () => (sim.jolt = true), 'медитация: дёрнуть головой');
   key('l', () => (sim.lost = !sim.lost), 'медитация: лицо пропало вкл/выкл');
@@ -324,7 +334,7 @@ function debugKeys(debug) {
 /** Лица кадра с подменой клавишами отладки l и y, без побочных эффектов (simulate съедает рывок головы). */
 function peekFaces(res) {
   if (sim.lost) return [];
-  const faces = res?.faces ?? [];
+  const faces = sim.virtual ? [syntheticFace()] : (res?.faces ?? []);
   return sim.second && faces.length ? [...faces, faces[0]] : faces;
 }
 
@@ -333,6 +343,11 @@ const inFrame = (p) => Boolean(p) && p.x > 0.02 && p.x < 0.98 && p.y > 0.02 && p
 
 /** Данные лица с подменой из клавиш отладки. Без подмены: те же самые данные. */
 export function simulate(res, t) {
+  if (sim.virtual) {
+    // модель ничего не показывает: вместо неё синтетическое лицо, глаза по клавише e (авто = закрыты)
+    const level = sim.eyes === 'open' ? OPEN_LEVEL : CLOSED_LEVEL;
+    res = { t, faces: [syntheticFace(0.5, 0.5, level)], blendshapes: [{ eyeBlinkLeft: level, eyeBlinkRight: level }] };
+  }
   if (sim.jolt) {
     // рывок отсчитываем от времени кадра: так же, как его видит контроллер
     sim.jolt = false;

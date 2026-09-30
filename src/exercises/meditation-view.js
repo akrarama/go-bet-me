@@ -591,8 +591,8 @@ export function createView() {
     g.fill();
   }
 
-  /** Второй человек: красный пунктир, лёгкая заливка и подпись над головой. */
-  function stranger(g, W, H, lw) {
+  /** Второй человек: красный пунктир, лёгкая заливка и подпись над головой (подпись только после старта: до него то же говорит карточка «Встань в позицию»). */
+  function stranger(g, W, H, lw, label) {
     const s = other;
     const a = s.alpha;
     if (a < 0.01 || !s.ok) return;
@@ -612,6 +612,7 @@ export function createView() {
     g.stroke();
     g.shadowBlur = 0;
     g.setLineDash(NO_DASH);
+    if (!label) return;
     // подпись: над головой, а если там шапка и таймер, то под подбородком
     g.font = `700 13px ${pal.font}`;
     const h = 26;
@@ -900,7 +901,7 @@ export function createView() {
             eye(g, 1, eyeA, lwe, eyeGlow);
           }
         }
-        stranger(g, W, H, clamp(other.rw * 0.016, 1.6, 3.2));
+        stranger(g, W, H, clamp(other.rw * 0.016, 1.6, 3.2), started);
         rings(g, t, lw);
       } finally {
         while (depth > 0) restore(g); // и после исключения холст без клипа и сдвига
