@@ -1323,13 +1323,14 @@ export default (t) => {
     a.ok(g.ctrl.count > 0 && g.ctrl.count <= 0.45, `разрыв в 5 с прибавил не больше 0.4 с (${g.ctrl.count})`);
   });
 
-  t.test('ролики отжиманий как «планка с движением»: время идёт в упоре, колени на полу не мерещатся', (a) => {
+  // Время планки идёт, когда руки держат планку (прямые или на локтях); в середине сгибания отжимания (125..145°) нет
+  t.test('ролики отжиманий как «планка с движением»: время идёт в упоре на прямых руках, колени на полу не мерещатся', (a) => {
     const side = replayTrace('pushup-side-short', plank);
     if (!side) return;
-    a.ok(side.ctrl.count > 5 && side.ctrl.count < 8, `pushup-side-short: ${side.ctrl.count.toFixed(1)} с планки`);
+    a.ok(side.ctrl.count > 3 && side.ctrl.count < 6.5, `pushup-side-short: ${side.ctrl.count.toFixed(1)} с планки`);
     a.eq(side.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
     const wide = replayTrace('pushup-horizontal', plank);
-    a.ok(wide.ctrl.count > 15 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
+    a.ok(wide.ctrl.count > 10 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
     a.eq(wide.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
   });
 

@@ -291,6 +291,35 @@ export default (t) => {
     a.ok(real.ctrl.count > 3.5, `в упоре ${real.ctrl.count.toFixed(2)} с`);
   });
 
+  /** Сбоку, точки по именам: { S, E, W, H, K, A } (плечо, локоть, запястье, таз, колено, щиколотка). */
+  function sidePose(j) {
+    const lm = blank();
+    const near = [[11, j.S], [13, j.E], [15, j.W], [23, j.H], [25, j.K], [27, j.A], [29, { x: j.A.x + 0.02, y: 0.8 }], [31, { x: j.A.x + 0.04, y: 0.79 }]];
+    near.forEach(([i, p]) => put(lm, i, p));
+    near.forEach(([i, p]) => put(lm, i + 1, { x: p.x + 0.01, y: p.y - 0.005 }, 0.55));
+    put(lm, 0, { x: j.S.x - 0.06, y: j.S.y - 0.03 });
+    return lm;
+  }
+  const legsOnFloor = { H: { x: 0.55, y: 0.8 }, K: { x: 0.7, y: 0.8 }, A: { x: 0.86, y: 0.8 } };
+  // лёжа на животе, грудь чуть приподнята на согнутых руках (кисти у груди, локти торчат вверх), таз и ноги на полу:
+  // плечо выше кисти на 0,31 длины руки, тело почти прямое. Прежняя проверка это пропускала
+  const LOW_COBRA = sidePose({ S: { x: 0.3, y: 0.75 }, E: { x: 0.38, y: 0.74 }, W: { x: 0.33, y: 0.8 }, ...legsOnFloor });
+  // планка на локтях: локоть под плечом на полу, предплечье вперёд, тело прямой линией до носков
+  const FOREARM = sidePose({ S: { x: 0.3, y: 0.68 }, E: { x: 0.3, y: 0.8 }, W: { x: 0.18, y: 0.8 }, H: { x: 0.58, y: 0.74 }, K: { x: 0.72, y: 0.77 }, A: { x: 0.86, y: 0.8 } });
+
+  t.test('планка: лёжа на животе на полусогнутых руках время не идёт, подсказка про руки', (a) => {
+    const s = feed(setup(plank), Array(150).fill(LOW_COBRA));
+    a.ok(s.ctrl.count < 0.5, `лёжа ${s.ctrl.count.toFixed(2)} с`);
+    const r = readyOf(plank, LOW_COBRA);
+    a.eq(r.checks.find((c) => c.id === 'plank').ok, false);
+    a.ok(/прямые руки или на локти/.test(r.hint), `подсказка: ${r.hint}`);
+  });
+
+  t.test('планка на локтях считается', (a) => {
+    const s = feed(setup(plank), Array(150).fill(FOREARM));
+    a.ok(s.ctrl.count > 3.5, `на локтях ${s.ctrl.count.toFixed(2)} с`);
+  });
+
   t.test('берпи: лёжа на полу не упор лёжа', (a) => {
     const m = { knee: 175, elbow: 170, tilt: 3, handsDown: true, armsUp: false, ankleY: 0.8 };
     a.eq(burpee.classify({ ...m, support: 0.02 }), 'move');
