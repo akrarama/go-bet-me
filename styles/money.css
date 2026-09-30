@@ -155,7 +155,7 @@
 
 /* кнопка оживает не сразу: жест, который ещё держат после LIVE, не пролистает итоги */
 .wait-cta { width: 100%; transition: opacity 0.45s var(--ease-out), transform 0.25s var(--ease-spring), background 0.2s, box-shadow 0.2s; }
-.wait-cta:disabled { opacity: 0.35; }
+.wait-cta.is-waiting { opacity: 0.35; }
 .wait-cta > span { font-size: 1.2em; }
 
 .result-empty { display: grid; gap: 14px; }

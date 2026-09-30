@@ -166,9 +166,13 @@ export function balanceLine(to, { from = to, note = '', mood = 'is-zero' } = {})
     </div>`;
 }
 
-/** Кнопка «👍 …» для пальца-курсора. Выключена, пока armCta её не оживит. */
+/**
+ * Кнопка «👍 …» для пальца-курсора. Пока armCta её не оживит, она только выглядит приглушённой (is-waiting)
+ * и нажатие не срабатывает. Не disabled: иначе dwell не видит палец, который уже лежит на кнопке при входе,
+ * и нажимает её сам, как только кнопка оживёт (итоги пролистывались бы через пару секунд).
+ */
 export const ctaButton = (text) =>
-  `<button class="btn btn--primary wait-cta" type="button" data-dwell data-cta disabled><span aria-hidden="true">👍</span>${esc(text)}</button>`;
+  `<button class="btn btn--primary wait-cta is-waiting" type="button" data-dwell data-cta><span aria-hidden="true">👍</span>${esc(text)}</button>`;
 
 /** Кнопка [data-cta] и жест 👍 ведут дальше (go), но только через GUARD_MS после входа и один раз. */
 export function armCta(ctx, go) {
@@ -183,7 +187,7 @@ export function armCta(ctx, go) {
   ctx.on('gesture', ({ name }) => name === 'Thumb_Up' && next());
   ctx.timeout(() => {
     ready = true;
-    if (btn) btn.disabled = false;
+    btn?.classList.remove('is-waiting');
   }, GUARD_MS);
 }
 
@@ -276,7 +280,7 @@ export default {
             </div>
             <div class="result__stat" style="--i: 1">
               <div class="result__stat-label">${esc(TEXT.time)}</div>
-              <div class="result__stat-value">${esc(formatTime(s.durationSec))}</div>
+              <div class="result__stat-value">${esc(formatTime(def.limitSec ? Math.min(s.durationSec, def.limitSec) : s.durationSec))}</div>
             </div>
           </div>
           <div class="result__section">${faultsHtml(faultItems(s.faults), rejectedSummary(s.rejected))}</div>
