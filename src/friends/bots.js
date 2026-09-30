@@ -5,19 +5,22 @@
 //   и ставят против через acceptBet (кто раньше, тот и в пуле): тост + событие bet.
 //   Кому не хватило места, тому «пул полон», в этот челлендж он больше не приходит.
 //   Уход из LOBBY закрывает ставки: кто не успел, уже не придёт. Debug: клавиша b, все сразу.
+// P1: пока есть ссылка для друзей (peer:pending / peer:ready) или друг на связи (friend:join), боты не забирают
+//   последнее место в пуле и приходят позже, чтобы настоящий друг успел (friendWait). Ссылки нет: всё как раньше.
 // LIVE: говорят только боты со ставкой в этом челлендже (соло = тишина): приветствие на старте,
 //   каждые MONEY.feed.repsEvery повторов (в медитации secondsEvery секунд), нервы у самой цели,
 //   подкол на ошибку, обрыв камеры, реакция на финиш. Не чаще MONEY.feed.gapMs, кроме приветствий и финала.
 // Лента #feed рисует любое событие comment, не только от ботов (P1: настоящие друзья).
 // RESULT: reaction(botId) = что бот сказал на финише этого челленджа.
 //
-// Слушает: state, live:start, count, fault, rejected, camera:lost, camera:back, live:end, comment.
+// Слушает: state, live:start, count, fault, rejected, camera:lost, camera:back, live:end, comment,
+//   peer:pending, peer:ready, peer:error, friend:join, friend:leave.
 // Шлёт: bet {bet, challenge}, comment {from, text, avatar, id, bot}.
 // Реплики и чистые помощники (LINES, FAULT_LINES, fill, pickLine, faultTheme, arrive) проверяет tests/money.test.js.
 
 import { MONEY } from '../config.js';
 import { bus } from '../bus.js';
-import { acceptBet, formatCredits, plural } from '../money.js';
+import { acceptBet, poolLeft, formatCredits, plural } from '../money.js';
 import { ui, esc, $ } from '../ui.js';
 
 // ─── Реплики ────────────────────────────────────────────────────
@@ -212,7 +215,25 @@ export function arrive(challenge, bot) {
 
 // ─── LOBBY: боты приходят и ставят ──────────────────────────────
 
+/**
+ * Сколько мс боту ещё подождать настоящего друга (0: пора ставить).
+ * link: 'none' | 'pending' | 'up' (есть ли ссылка для друзей); watching: сколько друзей смотрят;
+ * realBet: кто-то из настоящих друзей уже поставил; room: свободно в пуле; amount: ставка бота;
+ * waited: мс с входа в LOBBY. Ссылки нет и друзей нет: 0, как раньше.
+ * Бот не должен съесть место, которое MONEY.botsWithFriend.reserve оставляет другу, пока не вышло время ожидания.
+ */
+export function friendWait({ link = 'none', watching = 0, realBet = false, room = 0, amount = 0, waited = 0 }, cfg = MONEY.botsWithFriend) {
+  if (link === 'none' && !watching) return 0;
+  if (realBet) return 0; // друг уже поставил: боты берут остаток
+  if (room - amount >= cfg.reserve) return 0; // после ставки бота другу всё ещё остаётся место
+  const cap = watching ? cfg.waitMs : cfg.graceMs;
+  return waited >= cap ? 0 : Math.min(cfg.recheckMs, cap - waited);
+}
+
 let arrivals = []; // кто в пути: { bot, challenge, timer }
+let link = 'none'; // есть ли ссылка для друзей: 'none' | 'pending' (грузим PeerJS) | 'up'
+const watching = new Set(); // id друзей, которые сейчас смотрят
+const enteredAt = new WeakMap(); // челлендж → когда в него первый раз вошли (мс)
 const turnedAway = new WeakMap(); // челлендж → id ботов, которым не хватило места в пуле
 
 const between = ([a, b]) => a + Math.random() * (b - a);
@@ -222,7 +243,27 @@ function awayOf(challenge) {
   return turnedAway.get(challenge);
 }
 
-function land({ bot, challenge }) {
+function land(a, { force = false } = {}) {
+  const { bot, challenge } = a;
+  if (!force) {
+    const wait = friendWait({
+      link,
+      watching: watching.size,
+      realBet: (challenge.bets ?? []).some((b) => !b.bot),
+      room: poolLeft(challenge),
+      amount: bot.amount,
+      waited: Date.now() - (enteredAt.get(challenge) ?? Date.now()),
+    });
+    if (wait > 0) {
+      // друг ещё может поставить: подождать и проверить снова (уход из LOBBY снимет таймер через cancelArrivals)
+      if (!arrivals.includes(a)) arrivals.push(a);
+      a.timer = setTimeout(() => {
+        arrivals = arrivals.filter((x) => x !== a);
+        land(a);
+      }, wait);
+      return;
+    }
+  }
   const r = arrive(challenge, bot);
   if (r.status === 'full') awayOf(challenge).add(bot.id);
   if (r.toast) ui.toast(r.toast.text, { icon: r.toast.icon, tone: r.toast.tone });
@@ -238,7 +279,7 @@ function cancelArrivals() {
 function arriveNow() {
   const list = arrivals;
   cancelArrivals();
-  list.forEach(land);
+  list.forEach((a) => land(a, { force: true }));
 }
 
 // ─── LIVE: реплики ботов ────────────────────────────────────────
@@ -445,18 +486,31 @@ export const bots = {
       if (live) live.lost = false;
     });
     bus.on('live:end', onEnd);
+    bus.on('peer:pending', () => {
+      link = 'pending';
+    });
+    bus.on('peer:ready', () => {
+      link = 'up';
+    });
+    bus.on('peer:error', ({ recoverable } = {}) => {
+      if (!recoverable) link = 'none'; // облако недоступно: ссылки нет, боты как раньше
+    });
+    bus.on('friend:join', ({ id }) => watching.add(id));
+    bus.on('friend:leave', ({ id }) => watching.delete(id));
     ctx.debug.key('b', () => ctx.app.state === 'LOBBY' && arriveNow(), 'боты: поставить сразу');
   },
 
   /** LOBBY: боты, которые ещё не ставили и не получили «пул полон», идут ставить по одному. */
   join(challenge) {
     cancelArrivals();
+    if (!enteredAt.has(challenge)) enteredAt.set(challenge, Date.now());
     const away = awayOf(challenge);
+    const delays = watching.size ? MONEY.botsWithFriend.delayMs : MONEY.botDelayMs; // друг уже здесь: боты не спешат
     let at = 0;
     arrivals = MONEY.bots
       .filter((b) => !away.has(b.id) && !challenge.bets?.some((x) => x.id === b.id))
       .map((bot) => {
-        at += between(MONEY.botDelayMs);
+        at += between(delays);
         const a = { bot, challenge };
         a.timer = setTimeout(() => {
           arrivals = arrivals.filter((x) => x !== a);
