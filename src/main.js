@@ -132,6 +132,11 @@ async function boot() {
   draw.resize();
 
   ui.loader.show('Загружаю распознавание');
+  const offProgress = bus.on('vision:progress', ({ model, loaded, total }) => {
+    if (model !== 'gesture') return;
+    if (total && loaded >= total) return ui.loader.show('Запускаю распознавание');
+    ui.loader.show(total ? `Загружаю распознавание · ${Math.min(99, Math.floor((loaded / total) * 100))}%` : 'Загружаю распознавание');
+  });
   vision.onFrame((frame) => onFrame(ctx, frame));
   vision.start();
   vision.use('gesture');
@@ -140,6 +145,8 @@ async function boot() {
   } catch (err) {
     console.error(err);
     return ui.fatal('Распознавание не загрузилось', 'Проверь интернет и обнови страницу.');
+  } finally {
+    offProgress();
   }
   models.preload(VISION.preload); // остальные модели в фоне
 
