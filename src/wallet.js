@@ -279,7 +279,7 @@ const chip = {
       const k = Math.min(1, Math.max(0, (t - t0) / ms)); // метка кадра бывает раньше t0
       const e = 1 - (1 - k) ** 3;
       this.shown = k < 1 ? from + (balance - from) * e : balance;
-      this.value.textContent = formatCredits(this.shown);
+      this.value.textContent = formatCredits(k < 1 ? Math.round(this.shown) : balance); // по пути целые, без мелькания дробей
       if (k < 1) this.raf = requestAnimationFrame(step);
     };
     this.raf = requestAnimationFrame(step);
