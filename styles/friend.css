@@ -106,6 +106,19 @@
 .friend__notice { margin: 0; padding: 10px 14px; border-radius: var(--r-sm); font-weight: 700; font-size: 15px; line-height: 1.35; }
 .friend__notice[data-tone="ok"] { background: rgba(61, 220, 132, 0.14); color: var(--ok); }
 .friend__notice[data-tone="warn"] { background: rgba(255, 176, 32, 0.14); color: var(--warn); }
+.friend__notice[data-tone="info"] { background: var(--surface-2); color: var(--muted); }
+
+/* Кредиты пополнили: плашка на несколько секунд под именем */
+.friend__topup {
+  justify-self: start; padding: 5px 12px; border-radius: var(--r-pill); background: rgba(61, 220, 132, 0.14); color: var(--ok);
+  font-weight: 700; font-size: 14px; animation: friend-in 0.4s var(--ease-out) both;
+}
+
+/* Игрок меняет условия: вместо ставок карточка «подожди» */
+.friend__setup { display: none; justify-items: center; gap: 6px; padding: 18px 0 8px; text-align: center; }
+.friend__setup .h2 { margin: 0; }
+.friend__card[data-mode="setup"] .friend__setup { display: grid; }
+.friend__card[data-mode="setup"] > :not(.friend__me):not(.friend__topup):not(.friend__setup) { display: none; }
 .friend__foot { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; text-align: center; }
 
 /* ─── Эфир: видео игрока, счёт, ошибки, реакции ─────────────── */

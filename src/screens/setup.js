@@ -25,10 +25,10 @@ export function mss(sec) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** Цель для кнопки и сводки: (squat, 10) → { num: '10', unit: 'повторов' }, (meditation, 1800) → { num: '30', unit: 'минут' }. */
+/** Цель для кнопки и сводки: (squat, 10) → { num: '10', unit: 'повторов' }, (meditation, 600) → { num: '10', unit: 'минут' }. */
 export function targetLabel(type, target) {
   if (CHALLENGES[type]?.unit === 'секунды') {
-    if (target >= 120 && target % 60 === 0) {
+    if (target >= 60 && target % 60 === 0) {
       const m = target / 60;
       return { num: String(m), unit: plural(m, 'минута', 'минуты', 'минут') };
     }
@@ -121,14 +121,14 @@ export default {
           return `<button class="btn setup-opt" data-dwell data-target="${n}" aria-pressed="false"><span class="setup-val"><span class="setup-num">${num}</span> <span class="setup-unit">${esc(unit)}</span></span></button>`;
         })
         .join('');
-      els.targets.dataset.count = def.targets.length; // два варианта (медитация) делят ряд пополам
+      els.targets.dataset.count = def.targets.length; // два варианта делят ряд пополам, три: на трети
       els.targets.classList.toggle('is-fresh', fresh);
       mark(els.targets, 'target', c.target);
       const lives = MEDITATION.lives;
       els.targetNote.textContent = def.limitSec
         ? `Время: ${mss(def.limitSec)}`
         : c.type === 'meditation'
-          ? `${lives} ${plural(lives, 'нарушение', 'нарушения', 'нарушений')} = провал`
+          ? `Замри с закрытыми глазами. ${lives}\u00A0${plural(lives, 'нарушение', 'нарушения', 'нарушений')}\u00A0=\u00A0провал` // неразрывные пробелы: «3 нарушения = провал» не рвётся
           : '';
     };
 

@@ -7,7 +7,9 @@
 //   handup  {side}           запястье выше носа GESTURES.handUpMs, side: 'left' | 'right' (сторона тела).
 //                            Нужна поза: экран включает модель 'pose' (например ['gesture', 'pose']).
 //   cursor  {x, y, visible}  кончик указательного пальца (точка руки 8) в CSS px экрана.
-//                            Рука пропала или модель жестов не работает → один {visible: false}.
+//                            Рука пропала, модель жестов не работает или рука уверенно (>= cursorOffMinScore, cursorOffMs подряд)
+//                            показывает 👍 👎 🖐 (GESTURES.cursorOff: команды, поднятая ладонь не должна «нажимать» кнопки
+//                            под собой) → один {visible: false}. Жест пропал: курсор возвращается сразу.
 //
 // Экранам (только читать, обновляется каждый кадр):
 //   gestures.current   стабильный жест ('None', когда руки нет)
@@ -394,6 +396,7 @@ const STALE_MS = GESTURES.cursorGraceMs + 150; // результат жесто�
 const POSE_SEEN_MS = 500;
 
 const gate = createGestureGate();
+const cursorGate = createCursorGate();
 const tracker = createHandUpTracker();
 let bus = null;
 let draw = null;
@@ -428,11 +431,39 @@ function hideCursor() {
   bus.emit('cursor', { visible: false });
 }
 
+/**
+ * Гейт курсора: рука служит командой (🖐 👍 👎), а не указкой. Гасим осторожно: жест уверенный (cursorOffMinScore) и держится
+ * cursorOffMs подряд, чтобы палец, на миг принятый за ладонь, курсор не терял. Жест пропал, сменился на другой, уверенность
+ * просела или руки нет: курсор возвращается сразу, без задержки.
+ * cursorGate.update(name, score, t) → true, если курсор гасить на этом кадре (t в мс).
+ */
+export function createCursorGate(opts = GESTURES) {
+  let name = null; // жест-команда, которую держат
+  let since = 0; // с какого кадра
+  return {
+    update(rawName, score, t) {
+      if (!opts.cursorOff.includes(rawName) || !(score >= opts.cursorOffMinScore)) {
+        name = null;
+        return false;
+      }
+      if (name !== rawName) {
+        name = rawName;
+        since = t;
+      }
+      return t - since >= opts.cursorOffMs;
+    },
+    reset() {
+      name = null;
+    },
+  };
+}
+
 function onHands(hand, t) {
   const fired = gate.update(hand?.gesture ?? NONE, hand?.score ?? 0, t);
   if (fired) bus.emit('gesture', { name: fired });
+  const command = cursorGate.update(hand?.gesture ?? NONE, hand?.score ?? 0, t);
   const tip = hand?.landmarks?.[8];
-  if (tip) {
+  if (tip && !command) {
     const { x, y } = draw.project(tip);
     cursorShown = true;
     bus.emit('cursor', { x, y, visible: true });

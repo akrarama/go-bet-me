@@ -57,10 +57,10 @@ export const VISION = {
 /** Типы челленджей. SETUP берёт варианты отсюда. limitSec: null = без лимита времени. */
 export const CHALLENGES = {
   squat: { label: 'Приседания', unit: 'повторы', model: 'pose', emoji: '🏋️', targets: [10, 20, 30], defaultTarget: 10, limitSec: 90,
-    placement: 'Ноутбук на столе, встань боком в 2-3 м, чтобы камера видела тебя с головы до ног' },
+    placement: 'Экран ноутбука вертикально, встань боком в 2,5-3 м, свет спереди, окно не за спиной' },
   pushup: { label: 'Отжимания', unit: 'повторы', model: 'pose', emoji: '💪', targets: [10, 20, 30], defaultTarget: 20, limitSec: 120,
-    placement: 'Камера на полу сбоку в 1,5-2,5 м, всё тело в кадре' },
-  meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 1800], defaultTarget: 60, limitSec: null,
+    placement: 'Камера на полу строго сбоку в 1,5-2,5 м, всё тело в кадре, свет спереди' },
+  meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 300, 600], defaultTarget: 60, limitSec: null,
     placement: 'Сядь напротив камеры, лицо по центру кадра' },
 };
 export const STAKES = [5, 10, 20];
@@ -134,6 +134,9 @@ export const GESTURES = {
   dwellPad: 16, // px: кнопка ловит палец чуть шире своих краёв
   dwellLeavePad: 32, // px: уйти с кнопки = выйти за такую зону (без дрожания на краю)
   dwellSettleMs: 450, // после смены экрана кнопки въезжают: dwell ждёт
+  cursorOff: ['Thumb_Up', 'Thumb_Down', 'Open_Palm'], // рука показывает такой жест: курсора нет (👍 👎 🖐 команды, а не указание пальцем)
+  cursorOffMinScore: 0.7, // жест-команда должна быть уверенной: ниже палец мог быть принят за ладонь, курсор не отнимаем
+  cursorOffMs: 250, // и держаться столько подряд: короткая ошибка распознавания курсор не отнимает (вернулся, как жест пропал)
   cursorGraceMs: 250, // рука пропала на столько: курсор ещё держим на месте
   cursorFilter: { minCutoff: 1.0, beta: 0.012, dCutoff: 1.0 }, // One Euro: дрожание в покое против задержки в движении
   handUpMs: 1000, // рука выше головы столько = Старт
