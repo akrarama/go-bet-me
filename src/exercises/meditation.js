@@ -8,12 +8,13 @@
 // другое нарушение за это время ждёт и списывает жизнь, только если его так и не исправили.
 // Подсказка нового нарушения 1.5 с держится поверх старых: каждая списанная жизнь со своей причиной.
 // 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть). count ≥ цели: done.
-// Пороги: config.MEDITATION. Контракт контроллера: см. squat.js.
+// Пороги: config.MEDITATION. Контракт контроллера: см. squat.js. Картинка поверх видео: meditation-view.js.
 // Отладка (?debug=1): e глаза авто/закрыты/открыты, n дёрнуть головой, l лицо пропало, y второе лицо.
 
 import { MEDITATION as M } from '../config.js';
 import { ema } from '../vision/geometry.js';
 import { blink, nose, noseTracker, primaryIndex, shiftW } from '../vision/face.js';
+import { createView } from './meditation-view.js';
 
 /**
  * Правила по приоритету: видимость > второй человек > глаза > голова. label: строка для итогов.
@@ -53,6 +54,7 @@ export function createController({ challenge, bus, feedback, debug }) {
   let lastTwoAt = -Infinity; // когда последний раз в кадре было два лица
   let jumpSince = null; // одинокое лицо далеко от прошлого носа: с какого кадра
   let fresh = null; // { code, until }: подсказка нового нарушения поверх старых
+  let view = null; // картинка поверх видео: meditation-view.js
 
   const c = {
     model: 'face',
@@ -226,7 +228,15 @@ export function createController({ challenge, bus, feedback, debug }) {
       debug?.set('нарушение', active ?? pending ?? 'нет');
     },
 
+    /** Своя отрисовка поверх видео (экран LIVE зовёт её вместо скелета, и во время отсчёта тоже). */
+    draw(frame, d) {
+      if (!c.faceData || c.faceData.t !== frame.face?.t) c.faceData = simulate(frame.face, frame.t);
+      (view ??= createView()).draw(frame, d, c);
+    },
+
     stop() {
+      view?.destroy();
+      view = null;
       if (current === c) current = null;
     },
 
