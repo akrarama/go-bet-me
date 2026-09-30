@@ -41,8 +41,10 @@ export function badgeOf({ reason, delta, round }) {
  * subscribe(fn): fn({ reason, delta, balance, round }) на каждое изменение,
  *   reason: 'hold' | 'settle' | 'refund' | 'topup' | 'reset' | 'sync'.
  */
-export function createWallet({ storage = null, key = MONEY.storageKey, start = MONEY.startBalance, fee = MONEY.APP_FEE, keep = MONEY.historyMax, now = () => Date.now() } = {}) {
+export function createWallet({ storage = null, key = MONEY.storageKey, start = MONEY.startBalance, fee = MONEY.APP_FEE, keep = MONEY.historyMax, now = () => Date.now(), tab = null } = {}) {
   const listeners = new Set();
+  // раунд другой вкладки (у него другая метка tab): пока та вкладка жива, его нельзя считать брошенным
+  const foreign = (r) => tab != null && r.tab != null && r.tab !== tab;
   let state = load();
   let orphan = null; // live:end без live:start (финиш клавишей во время отсчёта): денег не было
 
@@ -97,6 +99,8 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
   }
 
   const latest = (challengeId) => last((h) => h.kind === 'round' && (challengeId == null || h.challengeId === challengeId));
+  // открытый раунд этого челленджа (без id: последний открытый); при двух вкладках последний открытый может быть чужим
+  const openOf = (challengeId) => last((h) => isOpen(h) && (challengeId == null || h.challengeId === challengeId));
 
   function close(round, status, settlement, reason) {
     const pay = toCents(settlement.player.payout);
@@ -124,13 +128,18 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
       return last(isOpen);
     },
 
+    /** Открытый раунд этой вкладки (чужие раунды другой вкладки не в счёт). */
+    get ownOpen() {
+      return last((h) => isOpen(h) && !foreign(h));
+    },
+
     canAfford(amount) {
       return toCents(amount) <= state.cents;
     },
 
     /** live:start: списать ставку игрока. Ставки против в этот момент закрыты: берём снимок. */
     hold(challenge) {
-      this.recover('replaced');
+      this.recover('replaced', { skip: foreign }); // брошенное нами закрываем, чужой живой раунд не трогаем
       orphan = null;
       const want = Math.max(0, toCents(challenge.stake));
       // не больше, чем есть на счёте: вторая вкладка или прыжок клавишей отладки не уводят баланс в минус
@@ -148,6 +157,7 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
         success: null,
         reason: null,
         startedAt: now(),
+        ...(tab != null ? { tab } : {}),
         balanceBefore: fromCents(state.cents),
       };
       state.cents -= S;
@@ -159,8 +169,8 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
 
     /** live:end: запомнить результат. Выплата позже, на экране итогов. */
     end(session) {
-      const r = this.open;
-      if (!r || r.status !== 'held' || (session?.challengeId != null && r.challengeId !== session.challengeId)) {
+      const r = openOf(session?.challengeId);
+      if (!r || r.status !== 'held') {
         orphan = session?.challengeId ?? null;
         return null;
       }
@@ -202,14 +212,14 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
 
     /** live:void: вернуть ставку. Доигранный раунд не отменяется: его результат уже есть. */
     refund(reason = 'void', challengeId = null) {
-      const r = this.open;
-      if (!r || r.status !== 'held' || (challengeId != null && r.challengeId !== challengeId)) return null;
+      const r = openOf(challengeId);
+      if (!r || r.status !== 'held') return null;
       return giveBack(r, reason);
     },
 
-    /** Закрыть всё недоигранное: не доиграли → возврат, доиграли → расчёт. Возвращает закрытые раунды. */
-    recover(reason = 'interrupted') {
-      return state.history.filter(isOpen).map((r) => (r.status === 'ended' ? pay(r) : giveBack(r, reason)));
+    /** Закрыть всё недоигранное: не доиграли → возврат, доиграли → расчёт. skip(round): раунды, которые не трогать. Возвращает закрытые. */
+    recover(reason = 'interrupted', { skip = null } = {}) {
+      return state.history.filter((r) => isOpen(r) && !skip?.(r)).map((r) => (r.status === 'ended' ? pay(r) : giveBack(r, reason)));
     },
 
     /** Пополнить до стартового баланса (кредиты не настоящие). Возвращает, сколько добавили. */
@@ -265,8 +275,30 @@ function browserStorage() {
   }
 }
 
+// Эта загрузка страницы. У раундов метка вкладки, чтобы вторая вкладка не приняла живой раунд первой за брошенный.
+const TAB = uid('t');
+
 let core = null;
-const get = () => (core ??= createWallet({ storage: browserStorage(), key: storageKey() }));
+const get = () => (core ??= createWallet({ storage: browserStorage(), key: storageKey(), tab: TAB }));
+
+/** Раунд этой вкладки держит замок Web Locks, пока страница жива (закрыли или перезагрузили: замок снимается сам). */
+function keepRound(id) {
+  try {
+    Promise.resolve(globalThis.navigator?.locks?.request(`protiv-round:${id}`, () => new Promise(() => {}))).catch(() => {});
+  } catch {
+    /* без Web Locks другие вкладки просто не узнают, что раунд живой */
+  }
+}
+
+/** id раундов, которые сейчас держит какая-то живая вкладка. */
+async function liveRoundIds() {
+  try {
+    const { held } = await globalThis.navigator.locks.query();
+    return new Set(held.filter((l) => l.name.startsWith('protiv-round:')).map((l) => l.name.slice('protiv-round:'.length)));
+  } catch {
+    return new Set();
+  }
+}
 
 /** Фишка баланса: число докручивается до нового, рядом всплывает изменение (+19 / −10). */
 const chip = {
@@ -334,27 +366,35 @@ const chip = {
 export const wallet = {
   init(ctx) {
     const w = get();
-    const lost = w.recover(); // перезагрузка посреди челленджа: вернуть ставку или рассчитать
+    // Раунд остался открытым (перезагрузка посреди челленджа, вкладку закрыли): вернуть ставку или рассчитать.
+    // Если открыт чужой раунд, а Web Locks есть, сначала узнаём, жива ли та вкладка (recoverOrphans ниже).
+    const checkLocks = Boolean(w.open) && typeof globalThis.navigator?.locks?.query === 'function';
+    const lost = w.open && !checkLocks ? w.recover() : [];
+    let quiet = false; // возврат при запуске: число баланса просто встаёт на место, без бейджа
     chip.mount(document.querySelector('#balance'), w.balance);
     ctx.debug.set('баланс', w.balance);
 
     w.subscribe((change) => {
       const { reason, delta, balance, round } = change;
-      chip.to(balance, delta, badgeOf(change));
+      if (quiet) chip.jump(balance);
+      else chip.to(balance, delta, badgeOf(change));
       ctx.debug.set('баланс', balance);
       if (reason === 'topup') ctx.ui.toast(`Пополнили до ${formatCredits(balance)} кр.`, { icon: '🪙', tone: 'ok' });
       if (reason === 'hold' && round?.requested != null)
         ctx.ui.toast(round.stake ? `Не хватало кредитов, ставка уменьшена до ${formatCredits(round.stake)} кр.` : 'Кредитов нет, играем без ставки', { icon: '🪙' });
     });
 
-    ctx.bus.on('live:start', ({ challenge }) => w.hold(challenge));
+    ctx.bus.on('live:start', ({ challenge }) => {
+      const round = w.hold(challenge);
+      if (round) keepRound(round.id);
+    });
     ctx.bus.on('live:end', ({ session }) => w.end(session));
     ctx.bus.on('live:void', ({ challenge, reason }) => w.refund(reason ?? 'void', challenge?.id ?? null));
     ctx.bus.on('bet:withdrawn', ({ bet, challenge }) => w.withdraw(challenge?.id, bet?.id)); // друг по ссылке ушёл посреди раунда
     // Ушли с LIVE: доиграли → расчёт (RESULT обычно уже сделал его сам в enter),
     // не доиграли и не отмена (так бывает только с клавишами отладки) → возврат
     ctx.bus.on('state', ({ from, to }) => {
-      const r = w.open;
+      const r = w.ownOpen; // раунд другой вкладки не наш
       if (from !== 'LIVE' || to === 'VOID' || !r) return;
       if (r.status === 'held') w.refund('left');
       else w.settle(r.challengeId);
@@ -370,9 +410,28 @@ export const wallet = {
     }, 'кошелёк: новый профиль, 100 кр.');
 
     // Прошлый раз челлендж оборвался на середине: сказать, что стало со ставкой
-    const back = lost.find((r) => r.status === 'refunded');
-    if (back) ctx.ui.toast('Прошлый челлендж прервался, ставку вернули', { icon: '↩️' });
-    else if (lost.length) ctx.ui.toast('Прошлый челлендж рассчитан, баланс обновлён', { icon: '🪙' });
+    const say = (done) => {
+      const back = done.find((r) => r.status === 'refunded');
+      if (back) ctx.ui.toast('Прошлый челлендж прервался, ставку вернули', { icon: '↩️' });
+      else if (done.length) ctx.ui.toast('Прошлый челлендж рассчитан, баланс обновлён', { icon: '🪙' });
+    };
+    say(lost);
+
+    // Открытый раунд мог остаться от другой ЖИВОЙ вкладки: её не трогаем. Замок ещё держится у страницы, которая
+    // только что перезагрузилась: проверяем несколько раз, пока он не снимется.
+    if (checkLocks) {
+      (async () => {
+        for (const wait of [0, 1500, 3500, 8000]) {
+          if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+          const live = await liveRoundIds();
+          quiet = true;
+          const done = w.recover('interrupted', { skip: (r) => r.tab === TAB || live.has(r.id) });
+          quiet = false;
+          say(done);
+          if (!w.open || w.open.tab === TAB) break;
+        }
+      })();
+    }
   },
 
   /** Кредиты сейчас. В SETUP это баланс до ставки (списание на live:start). */

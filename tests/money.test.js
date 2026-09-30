@@ -261,6 +261,67 @@ function walletTests(t) {
     a.eq(again.round.id, res.round.id);
   });
 
+  t.test('кошелёк: две вкладки, вторая не считает живой раунд первой брошенным, оба раунда доигрываются', (a) => {
+    const storage = memory();
+    const A = createWallet({ storage, tab: 'A' });
+    const chA = challenge();
+    A.hold(chA);
+    a.eq(A.balance, 90);
+    const B = createWallet({ storage, tab: 'B' }); // вторая вкладка открылась и прочитала общее хранилище
+    a.eq(B.balance, 90);
+    a.eq(B.open.tab, 'A', 'видит раунд первой вкладки');
+    const chB = challenge();
+    B.hold(chB); // раунд A не должен быть закрыт как брошенный
+    a.eq(B.balance, 80);
+    a.eq(B.open.tab, 'B');
+    A.reload(); // вкладка A получила событие storage
+    a.eq(A.balance, 80);
+    a.eq(A.ownOpen.challengeId, chA.id, 'свой раунд A по-прежнему открыт');
+    a.eq(A.open.challengeId, chB.id, 'а последний открытый чужой');
+    a.ok(A.end(finished(chA, true)), 'A доигрывает свой раунд, а не чужой');
+    a.eq(A.settle(chA.id).round.status, 'settled');
+    a.eq(A.balance, 99, '80 + 19');
+    B.reload();
+    a.ok(B.end(finished(chB, false)));
+    B.settle(chB.id);
+    a.eq(B.balance, 99, 'B проиграл: 99, ставка B ушла');
+    const rs = B.history.filter((h) => h.kind === 'round');
+    a.deep(rs.map((r) => r.status), ['settled', 'settled']);
+  });
+
+  t.test('кошелёк: recover пропускает названные раунды; hold заменяет свой брошенный и раунд без метки', (a) => {
+    const storage = memory();
+    const old = createWallet({ storage }); // без метки: раунд «из прошлой версии»
+    old.hold(challenge());
+    const A = createWallet({ storage, tab: 'A' });
+    a.eq(A.recover('x', { skip: () => true }).length, 0, 'skip: ничего не тронули');
+    a.eq(A.balance, 90);
+    A.hold(challenge()); // раунд без метки заменяется, как раньше
+    a.eq(A.history.filter((h) => h.kind === 'round' && h.status === 'refunded').length, 1);
+    a.eq(A.balance, 90, 'вернули 10 и списали 10');
+    const own = challenge();
+    A.hold(own);
+    a.eq(A.history.filter((h) => h.kind === 'round' && h.status === 'refunded').length, 2, 'свой брошенный раунд заменился');
+    const B = createWallet({ storage, tab: 'B' });
+    a.eq(B.recover().length, 1, 'без skip восстановление забирает всё, что открыто');
+    a.eq(B.balance, 100);
+  });
+
+  t.test('кошелёк: отмена и итог находят свой раунд, даже если последний открытый чужой', (a) => {
+    const storage = memory();
+    const A = createWallet({ storage, tab: 'A' });
+    const chA = challenge();
+    A.hold(chA);
+    const B = createWallet({ storage, tab: 'B' });
+    const chB = challenge();
+    B.hold(chB);
+    A.reload();
+    a.eq(A.refund('camera', chA.id).status, 'refunded', 'A отменяет свой раунд, чужой остаётся');
+    a.eq(A.round(chB.id).status, 'held');
+    a.eq(A.refund('void', 'нет-такого'), null);
+    a.eq(A.balance, 90, 'вернули ставку A, ставка B ещё держится');
+  });
+
   t.test('кошелёк: бейдж у баланса при расчёте показывает чистый итог раунда, как карточка итогов', (a) => {
     const w = createWallet({ storage: memory() });
     const changes = [];
