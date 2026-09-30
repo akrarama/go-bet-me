@@ -1,7 +1,7 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
+import { DEBUG, DEBUG_STATE, VISION, CHALLENGES, JOIN_ID } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
@@ -132,6 +132,11 @@ async function boot() {
   draw.resize();
 
   ui.loader.show('Загружаю распознавание');
+  const offProgress = bus.on('vision:progress', ({ model, loaded, total }) => {
+    if (model !== 'gesture') return;
+    if (total && loaded >= total) return ui.loader.show('Запускаю распознавание');
+    ui.loader.show(total ? `Загружаю распознавание · ${Math.min(99, Math.floor((loaded / total) * 100))}%` : 'Загружаю распознавание');
+  });
   vision.onFrame((frame) => onFrame(ctx, frame));
   vision.start();
   vision.use('gesture');
@@ -140,6 +145,8 @@ async function boot() {
   } catch (err) {
     console.error(err);
     return ui.fatal('Распознавание не загрузилось', 'Проверь интернет и обнови страницу.');
+  } finally {
+    offProgress();
   }
   models.preload(VISION.preload); // остальные модели в фоне
 
@@ -153,4 +160,24 @@ async function boot() {
   app.go(DEBUG_STATE && SCREENS[DEBUG_STATE] ? DEBUG_STATE : 'IDLE');
 }
 
-boot();
+/** Страница друга по ссылке ?join=<id> (P1): без камеры и моделей, только экран FRIEND (раздел 14.2). */
+async function bootFriend(hostId) {
+  const ctx = makeContext();
+  app.init(ctx);
+  debug.mount($('#debug'));
+  guardInput();
+  document.body.classList.add('is-friend');
+  ui.loader.show('Открываю челлендж друга');
+  try {
+    const { default: friend } = await import('./screens/friend.js');
+    app.register('FRIEND', friend);
+  } catch (err) {
+    console.error(err);
+    return ui.fatal('Ссылка не открылась', 'Обнови страницу или попроси у друга новую ссылку.');
+  }
+  ui.loader.hide();
+  app.go('FRIEND', { hostId });
+}
+
+if (JOIN_ID) bootFriend(JOIN_ID);
+else boot();

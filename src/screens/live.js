@@ -1,6 +1,9 @@
 // LIVE: общий экран челленджа. Владелец: координатор.
 // Упражнение подключается как контроллер из src/exercises/<type>.js (createController),
-// экран даёт отсчёт 3-2-1, таймер, крупный счётчик, жизни, обрыв камеры → VOID, финиш → RESULT.
+// экран даёт «Встань в позицию» (если у контроллера есть ready), отсчёт 3-2-1, таймер, крупный счётчик,
+// жизни, обрыв камеры → VOID, финиш → RESULT.
+// Фазы: loading → position → countdown → live → done. Ставка списывается на live:start,
+// поэтому до него обрыв камеры не отменяет челлендж, а возвращает в LOBBY.
 //
 // Шлёт: live:start {challenge}, count {count, target, unit, type}, live:end {session, challenge}.
 
@@ -31,11 +34,18 @@ export default {
           <div class="lives" data-lives hidden></div>
           <ul class="rejects" data-rejects></ul>
         </div>
+        <div class="position" data-position hidden style="--hold: ${APP.readyHoldMs}ms">
+          <div class="position__title position__title--wait">Встань в позицию</div>
+          <div class="position__title position__title--ready">Отлично, замри</div>
+          <div class="position__place">${esc(def.placement ?? '')}</div>
+          <ul class="position__checks" data-checks></ul>
+          <div class="position__hold" aria-hidden="true"></div>
+        </div>
         <div class="countdown" data-countdown hidden></div>
         <div class="lost" data-lost hidden>
           <div class="lost__title">Камера пропала</div>
           <div class="lost__count" data-lost-count></div>
-          <div class="lost__text">Вернись в кадр, иначе челлендж отменится и всем вернут ставки</div>
+          <div class="lost__text" data-lost-text></div>
         </div>
         <div class="finale" data-finale hidden></div>
       </div>`;
@@ -43,7 +53,7 @@ export default {
     r.els = {
       timer: q('[data-timer]'), count: q('[data-count]'), progress: q('[data-progress]'), lives: q('[data-lives]'),
       countdown: q('[data-countdown]'), lost: q('[data-lost]'), lostCount: q('[data-lost-count]'), finale: q('[data-finale]'),
-      rejects: q('[data-rejects]'),
+      rejects: q('[data-rejects]'), position: q('[data-position]'), checks: q('[data-checks]'), lostText: q('[data-lost-text]'),
     };
 
     // Лог незасчитанных повторов: последние три
@@ -57,6 +67,10 @@ export default {
 
     ctx.on('camera:lost', ({ since }) => {
       r.lostSince = since ?? performance.now();
+      r.els.lostText.textContent = r.phase === 'live'
+        ? 'Вернись в кадр, иначе челлендж отменится и всем вернут ставки'
+        : 'Челлендж ещё не начался, ставки не списаны. Ждём камеру';
+      r.els.lostCount.hidden = r.phase !== 'live';
       r.els.lost.hidden = false;
     });
     ctx.on('camera:back', () => {
@@ -79,6 +93,11 @@ export default {
     ctx.vision.use(r.controller.model);
     render(ctx, r);
 
+    if (typeof r.controller.ready === 'function' && APP.readyMaxMs > 0) {
+      r.phase = 'position';
+      await position(ctx, r);
+      if (run !== r || r.phase !== 'position') return;
+    }
     r.phase = 'countdown';
     await countdown(ctx, r);
     if (run !== r || r.phase !== 'countdown') return;
@@ -90,7 +109,9 @@ export default {
 
   frame(frame, ctx) {
     const r = run;
-    if (!r?.controller || r.phase !== 'live' || frame.ran !== r.controller.model) return;
+    if (!r?.controller || frame.ran !== r.controller.model) return;
+    if (r.phase === 'position') return checkPosition(r, frame);
+    if (r.phase !== 'live') return;
     r.controller.frame(frame, frame.t);
     render(ctx, r);
     if (r.controller.failed) finish(ctx, r, 'failed');
@@ -109,6 +130,52 @@ export default {
     run = null;
   },
 };
+
+/** «Встань в позицию»: галочки контроллера вживую, отсчёт после APP.readyHoldMs удержания или через APP.readyMaxMs. */
+function position(ctx, r) {
+  r.els.position.hidden = false;
+  return new Promise((resolve) => {
+    r.positionDone = () => {
+      r.positionDone = null;
+      r.els.position.hidden = true;
+      resolve();
+    };
+    const giveUp = () => {
+      if (run !== r || !r.positionDone) return;
+      if (r.lostSince) return ctx.timeout(giveUp, 1000); // камеры нет: ждём её, денег ещё нет
+      r.positionDone();
+    };
+    ctx.timeout(giveUp, APP.readyMaxMs);
+  });
+}
+
+function checkPosition(r, frame) {
+  let res = null;
+  try {
+    res = r.controller.ready(frame, frame.t);
+  } catch (err) {
+    console.error('[live] ready', err);
+    return r.positionDone?.(); // сломанная проверка не держит игрока: сразу отсчёт
+  }
+  const checks = Array.isArray(res?.checks) ? res.checks : [];
+  const key = checks.map((c) => `${c.id}:${c.ok ? 1 : 0}:${c.text}`).join('|');
+  if (key !== r.checksKey) {
+    r.checksKey = key;
+    r.els.checks.innerHTML = checks
+      .map((c) => `<li class="position__check${c.ok ? ' is-ok' : ''}"><span class="position__mark" aria-hidden="true"></span>${esc(c.text)}</li>`)
+      .join('');
+  }
+  if (res?.ok) {
+    if (!r.okSince) {
+      r.okSince = frame.t;
+      r.els.position.classList.add('is-ready');
+    }
+    if (frame.t - r.okSince >= APP.readyHoldMs) r.positionDone?.();
+  } else if (r.okSince) {
+    r.okSince = 0;
+    r.els.position.classList.remove('is-ready');
+  }
+}
 
 function countdown(ctx, r) {
   return new Promise((resolve) => {
@@ -159,11 +226,21 @@ function tick(ctx, r) {
   const now = performance.now();
   if (r.lostSince && r.phase !== 'done') {
     const left = APP.voidAfterMs - (now - r.lostSince);
-    r.els.lostCount.textContent = Math.max(0, Math.ceil(left / 1000));
-    if (left <= 0) {
+    if (r.phase === 'live') {
+      r.els.lostCount.hidden = false;
+      r.els.lostCount.textContent = Math.max(0, Math.ceil(left / 1000));
+      r.els.lostText.textContent = 'Вернись в кадр, иначе челлендж отменится и всем вернут ставки';
+      if (left <= 0) {
+        r.phase = 'done';
+        ctx.bus.emit('live:void', { challenge: r.ch, reason: 'camera' });
+        ctx.app.go('VOID', { reason: 'camera' });
+        return;
+      }
+    } else if (r.phase === 'position' && left <= 0) {
+      // Ставка ещё не списана: отменять нечего, возвращаемся в лобби
       r.phase = 'done';
-      ctx.bus.emit('live:void', { challenge: r.ch, reason: 'camera' });
-      ctx.app.go('VOID', { reason: 'camera' });
+      ctx.ui.toast('Камера пропала, челлендж не начался');
+      ctx.app.go('LOBBY');
       return;
     }
   }
@@ -204,6 +281,7 @@ function finish(ctx, r, reason) {
   ctx.feedback.clearNow();
   sound.play(success ? 'win' : 'lose');
   r.els.countdown.hidden = true;
+  r.els.position.hidden = true;
   r.els.finale.hidden = false;
   r.els.finale.dataset.success = success;
   r.els.finale.textContent = success ? 'Сделал!' : 'Не успел';

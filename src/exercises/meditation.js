@@ -9,6 +9,7 @@
 // Подсказка нового нарушения 1.5 с держится поверх старых: каждая списанная жизнь со своей причиной.
 // 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть). count ≥ цели: done.
 // Пороги: config.MEDITATION. Контракт контроллера: см. squat.js. Картинка поверх видео: meditation-view.js.
+// До отсчёта экран LIVE зовёт ready(frame): «Встань в позицию», две галочки (лицо в кадре, в кадре только ты).
 // Отладка (?debug=1): e глаза авто/закрыты/открыты, n дёрнуть головой, l лицо пропало, y второе лицо.
 
 import { MEDITATION as M } from '../config.js';
@@ -231,6 +232,23 @@ export function createController({ challenge, bus, feedback, debug }) {
       debug?.set('нарушение', active ?? pending ?? 'нет');
     },
 
+    /**
+     * «Встань в позицию» до отсчёта: лицо в кадре (нос внутри кадра) и в кадре только ты.
+     * Чистая проверка: без событий, подсказок и счёта, работает и до start().
+     */
+    ready(frame) {
+      const faces = peekFaces(frame?.face);
+      const face = faces.length > 0 && inFrame(nose(faces[primaryIndex(faces)]));
+      const alone = faces.length === 1;
+      return {
+        ok: face && alone,
+        checks: [
+          { id: 'face', text: 'Лицо в кадре', ok: face },
+          { id: 'alone', text: 'В кадре только ты', ok: alone },
+        ],
+      };
+    },
+
     /** Своя отрисовка поверх видео (экран LIVE зовёт её вместо скелета, и во время отсчёта тоже). */
     draw(frame, d) {
       if (!c.faceData || c.faceData.t !== frame.face?.t) c.faceData = simulate(frame.face, frame.t);
@@ -302,6 +320,16 @@ function debugKeys(debug) {
   key('l', () => (sim.lost = !sim.lost), 'медитация: лицо пропало вкл/выкл');
   key('y', () => (sim.second = !sim.second), 'медитация: второе лицо вкл/выкл');
 }
+
+/** Лица кадра с подменой клавишами отладки l и y, без побочных эффектов (simulate съедает рывок головы). */
+function peekFaces(res) {
+  if (sim.lost) return [];
+  const faces = res?.faces ?? [];
+  return sim.second && faces.length ? [...faces, faces[0]] : faces;
+}
+
+/** Точка внутри кадра с небольшим полем: лицо у самого края или за ним лицом в кадре не считаем. */
+const inFrame = (p) => Boolean(p) && p.x > 0.02 && p.x < 0.98 && p.y > 0.02 && p.y < 0.98;
 
 /** Данные лица с подменой из клавиш отладки. Без подмены: те же самые данные. */
 export function simulate(res, t) {

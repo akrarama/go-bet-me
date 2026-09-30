@@ -198,9 +198,23 @@ function setup(mod, { target = 10, voice = false } = {}) {
       t += dt;
     }
   };
+  /** «Встань в позицию» до отсчёта: ready на тех же часах, что feed; ответ на последнем кадре. */
+  const probe = (frames, { dt = 1000 / FPS } = {}) => {
+    let res = null;
+    for (const lm of frames) {
+      clock.to(t);
+      res = ctrl.ready({ t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: { t, landmarks: lm } }, t);
+      t += dt;
+    }
+    return res;
+  };
+  const wait = (ms) => {
+    t += ms;
+    clock.to(t);
+  };
   ctrl?.start(0);
   const of = (type) => events.filter((e) => e.type === type);
-  return { ctrl, feedback, events, of, spoken, sounds, clock, feed, synth, get t() { return t; } };
+  return { ctrl, feedback, events, of, spoken, sounds, clock, feed, probe, wait, synth, get t() { return t; } };
 }
 
 
@@ -710,6 +724,104 @@ export default (t) => {
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
   });
 
+  // ─── «Встань в позицию» (ready): галочки до отсчёта LIVE ───
+  const ticks = (r) => r.checks.map((c) => [c.id, c.text, c.ok]);
+  const byId = (r) => Object.fromEntries(r.checks.map((c) => [c.id, c.ok]));
+  const FACING = { ...STAND, facing: true, front: true };
+
+  t.test('ready приседания: боком, прямо, тело видно: три галочки, тексты до 22 символов', (a) => {
+    const s = setup(squat);
+    const r = s.probe(hold(squatPose(STAND), 3));
+    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['side', 'Боком к камере', true], ['stand', 'Стоишь прямо', true]]);
+    a.eq(r.ok, true);
+    a.ok(r.checks.every((c) => c.text.length <= 22), 'text до 22 символов');
+  });
+
+  t.test('ready приседания: лицом к камере нет только «боком», повернулся боком: все галочки', (a) => {
+    const s = setup(squat);
+    let r = s.probe(hold(squatPose(FACING), 6));
+    a.deep(byId(r), { body: true, side: false, stand: true });
+    a.eq(r.ok, false);
+    r = s.probe(hold(squatPose(STAND), 8));
+    a.deep(byId(r), { body: true, side: true, stand: true });
+    a.eq(r.ok, true);
+  });
+
+  t.test('ready приседания: щиколотки не видны, наклонился, никого нет: не готов', (a) => {
+    const s = setup(squat);
+    const noAnkles = { 27: { visibility: 0.2 }, 28: { visibility: 0.2 } };
+    a.deep(byId(s.probe([squatPose({ ...STAND, override: noAnkles })])), { body: false, side: false, stand: false });
+    a.deep(byId(s.probe(hold(squatPose({ ...STAND, lean: 78 }), 3))), { body: true, side: true, stand: false });
+    for (const pose of [null, undefined]) {
+      const r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose }, s.t);
+      a.deep(byId(r), { body: false, side: false, stand: false });
+      a.eq(r.ok, false);
+    }
+    a.deep(byId(s.probe([null])), { body: false, side: false, stand: false }, 'кадр без точек');
+  });
+
+  t.test('ready приседания: чистая проверка, счёт после неё тот же, что без неё', (a) => {
+    const frames = [...hold(squatPose(STAND), 12), ...rep(squatPose, STAND, DEEP, 1800), ...rep(squatPose, STAND, { ...DEEP, lean: 58 }, 1800), ...hold(squatPose(STAND), 10)];
+    const cold = setup(squat);
+    cold.feed(frames);
+    const warm = setup(squat);
+    warm.probe([...hold(squatPose(FACING), 6), ...hold(squatPose(STAND), 30)]); // пришёл, повернулся, встал
+    a.eq(warm.events.length, 0, 'ready ничего не шлёт в шину');
+    a.eq(warm.feedback.current, null, 'ready не пишет подсказку');
+    a.eq(warm.sounds.length + warm.spoken.length, 0, 'ready без звука');
+    a.eq(warm.ctrl.count, 0);
+    a.deep(warm.ctrl.summary().faults, []);
+    warm.wait(3000); // отсчёт 3-2-1
+    warm.ctrl.start(warm.t);
+    warm.feed(frames);
+    a.eq(cold.ctrl.count, 1, 'контроль: без ready один повтор засчитан, один нет');
+    a.eq(warm.ctrl.count, cold.ctrl.count);
+    a.deep(warm.of('rejected').map((e) => e.code), cold.of('rejected').map((e) => e.code));
+    a.deep(warm.of('fault').map((e) => e.code), cold.of('fault').map((e) => e.code));
+  });
+
+  t.test('ready приседания: ✓ значит, что счёт пойдёт, ✗ значит, что кадр в счёт не идёт', (a) => {
+    for (const [pose, ok] of [[STAND, true], [FACING, false], [{ ...STAND, lean: 78 }, false]]) {
+      const s = setup(squat);
+      const r = s.probe(hold(squatPose(pose), 12));
+      a.eq(r.ok, ok, `ready ${JSON.stringify(pose)}`);
+      // тот же кадр в счёте: если ready говорит «готов», кадр доходит до счётчика (угол считается)
+      s.feed(hold(squatPose(pose), 12));
+      a.eq(s.ctrl.counter.angle != null, ok, `счётчик ${JSON.stringify(pose)}`);
+    }
+  });
+
+  t.test('ready отжимания: упор лёжа готов, стоя и без ног в кадре нет; тексты до 22 символов', (a) => {
+    const s = setup(pushup);
+    let r = s.probe(hold(pushupPose(TOP), 3));
+    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true]]);
+    a.eq(r.ok, true);
+    a.ok(r.checks.every((c) => c.text.length <= 22), 'text до 22 символов');
+    r = s.probe(hold(squatPose(STAND), 3)); // стоит
+    a.deep(byId(r), { body: true, plank: false });
+    a.eq(r.ok, false);
+    const noAnkles = { 27: { visibility: 0.2 }, 28: { visibility: 0.2 } };
+    r = s.probe([pushupPose({ ...TOP, override: noAnkles })]);
+    a.deep(byId(r), { body: false, plank: false });
+    r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, s.t);
+    a.deep(byId(r), { body: false, plank: false });
+  });
+
+  t.test('ready отжимания: чистая проверка, счёт после неё тот же, что без неё', (a) => {
+    const frames = [...hold(pushupPose(TOP), 10), ...rep(pushupPose, TOP, LOW, 1400), ...rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, LOW, 1600), ...rep(pushupPose, TOP, LOW, 1400), ...hold(pushupPose(TOP), 10)];
+    const cold = setup(pushup);
+    cold.feed(frames);
+    const warm = setup(pushup);
+    warm.probe([...hold(squatPose(STAND), 6), ...hold(pushupPose(TOP), 30)]); // стоял, лёг в упор
+    a.eq(warm.events.length, 0, 'ready ничего не шлёт в шину');
+    a.eq(warm.feedback.current, null, 'ready не пишет подсказку');
+    warm.wait(3000);
+    warm.ctrl.start(warm.t);
+    warm.feed(frames);
+    a.eq(cold.ctrl.count, 2, 'контроль: без ready два повтора засчитаны, провисший нет');
+    a.eq(warm.ctrl.count, cold.ctrl.count);
+    a.deep(warm.of('rejected').map((e) => e.code), cold.of('rejected').map((e) => e.code));
+  });
 
   // ─── Настоящие ролики (калибровка порогов) ───
   t.test('ролик: приседания сбоку: 5 засчитано, шестой не засчитан за наклон спины', (a) => {

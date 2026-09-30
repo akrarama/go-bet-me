@@ -63,6 +63,13 @@ export const GATES = {
   plank: { hint: 'Прими упор лёжа, боком к камере' },
 };
 
+/**
+ * Положение до старта («Встань в позицию»): то же условие, что пропускает кадр в счёт (gate ниже).
+ * Тело в кадре добавляет сам движок (reps.js ready).
+ */
+const isPlank = (m, cfg) => m.tilt != null && m.tilt < cfg.plankMaxTilt && m.handsDown;
+export const CHECKS = [{ id: 'plank', text: 'Упор лёжа', test: isPlank }];
+
 /** Метрики кадра (сторона idx уже выбрана и видна). */
 export function measure({ lm, idx, aspect, sm, cfg = REPS.pushup }) {
   const shoulder = lm[idx.shoulder];
@@ -88,7 +95,8 @@ export function createController(deps) {
     visible: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'],
     angle: ['shoulder', 'elbow', 'wrist'],
     measure,
-    gate: (m) => (m.tilt != null && m.tilt < cfg.plankMaxTilt && m.handsDown ? null : GATES.plank),
+    gate: (m) => (isPlank(m, cfg) ? null : GATES.plank),
+    checks: CHECKS,
     rules: [RULES.sag, RULES.pike],
     turn(ev) {
       if (ev.type === 'valley' && ev.phase === 'UP' && ev.angle > cfg.down && ev.angle <= cfg.halfDownFrom) return { rule: RULES.halfDown, value: ev.angle };
