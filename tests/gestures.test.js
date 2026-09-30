@@ -511,10 +511,11 @@ export default (t) => {
     a.deep(j.onGesture('Thumb_Up', 200), quiet);
     a.eq(j.done, 'pass');
     const k = createLivenessJudge('right_hand_up', { t0: 0 });
-    k.tick(5000);
-    a.deep(k.onHandUp('right', 5100), quiet, 'после fail pass нет:');
-    a.deep(k.onHandUp('left', 5100), quiet);
-    a.deep(k.tick(6000), quiet);
+    const end = G.livenessSec * 1000; // дедлайн из config, а не зашитые 5 с
+    k.tick(end);
+    a.deep(k.onHandUp('right', end + 100), quiet, 'после fail pass нет:');
+    a.deep(k.onHandUp('left', end + 100), quiet);
+    a.deep(k.tick(end + 1000), quiet);
     a.eq(k.done, 'fail');
   });
 
@@ -1174,9 +1175,9 @@ export default (t) => {
     a.eq(goalChip('meditation', 60, MEDITATION_DEF), '1 минута');
   });
 
-  t.test('config: у каждого типа есть цели, цель по умолчанию среди них, подписи не пустые (3 типа или 4)', (a) => {
+  t.test('config: у каждого типа есть цели, цель по умолчанию среди них, подписи не пустые (3-8 типов)', (a) => {
     const types = Object.keys(CHALLENGES);
-    a.ok(types.length >= 3 && types.length <= 4, `типов ${types.length}: раскладка SETUP рассчитана на 3-4`);
+    a.ok(types.length >= 3 && types.length <= 8, `типов ${types.length}: раскладка SETUP рассчитана на 3-8`);
     for (const type of types) {
       const def = CHALLENGES[type];
       a.ok(def.targets.length >= 2 && def.targets.length <= 3, `${type}: целей ${def.targets.length}`);

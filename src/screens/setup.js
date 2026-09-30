@@ -104,6 +104,7 @@ export default {
               </button>`)
               .join('')}
             </div>
+            <p class="setup-desc" data-desc></p>
           </div>
           <div class="setup-row">
             <div class="setup-label">Цель<span class="setup-note" data-target-note></span></div>
@@ -130,6 +131,7 @@ export default {
       targetNote: q('[data-target-note]'),
       stakes: q('[data-stakes]'),
       stakeNote: q('[data-stake-note]'),
+      desc: q('[data-desc]'),
       back: q('.setup-back'),
       next: q('.setup-next'),
     });
@@ -147,6 +149,7 @@ export default {
       els.targets.classList.toggle('is-fresh', fresh);
       mark(els.targets, 'target', c.target);
       els.targetNote.textContent = goalNote(c.type, def);
+      els.desc.textContent = def.howto ?? ''; // как выполнять: для отжиманий и планки «боком к камере»
     };
 
     const renderStakes = () => {

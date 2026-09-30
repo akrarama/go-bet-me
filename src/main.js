@@ -97,6 +97,7 @@ function debugKeys() {
   debug.key('r', () => bus.emit('debug:count'), 'LIVE: +1 к счёту');
   debug.key('v', () => camera.freeze(), 'обрыв камеры вкл/выкл');
   debug.key(' ', () => (camera.video.paused ? camera.video.play() : camera.video.pause()), 'пауза видео');
+  debug.key('g', saveRecording, 'записать позу за 20 с в fixtures/traces');
   debug.key('t', () => {
     const types = Object.keys(CHALLENGES);
     const next = types[(types.indexOf(app.challenge.type) + 1) % types.length];
@@ -105,7 +106,33 @@ function debugKeys() {
   }, 'сменить тип челленджа');
 }
 
+// Запись позы для разбора (только ?debug=1): последние 20 с точек скелета, клавиша g сохраняет в
+// fixtures/traces/live-<время>.json (через tools/serve.py). Формат как у трасс роликов, t у каждого кадра.
+const REC_MS = 20000;
+const rec = [];
+let recLast = null;
+function record(frame) {
+  const pose = frame.pose;
+  if (!pose?.landmarks || pose.landmarks === recLast) return;
+  recLast = pose.landmarks;
+  const r4 = (v) => Math.round(v * 1e4) / 1e4;
+  rec.push({ t: Math.round(pose.t), w: frame.width, h: frame.height, lm: pose.landmarks.map((p) => [r4(p.x), r4(p.y), r4(p.z ?? 0), r4(p.visibility ?? 0)]) });
+  while (rec.length && rec[rec.length - 1].t - rec[0].t > REC_MS) rec.shift();
+}
+async function saveRecording() {
+  if (rec.length < 2) return ui.toast('Поза ещё не записана');
+  const span = (rec[rec.length - 1].t - rec[0].t) / 1000;
+  const name = `live-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
+  const data = {
+    input: { source: 'camera', type: app.challenge?.type, fps: Math.round(((rec.length - 1) / span) * 10) / 10, count: rec.length, width: rec[0].w, height: rec[0].h, seconds: span },
+    frames: rec.map((f) => ({ t: f.t, lm: f.lm })),
+  };
+  const res = await fetch(`/__save?path=fixtures/traces/${name}.json`, { method: 'POST', body: JSON.stringify(data) }).catch(() => null);
+  ui.toast(res?.ok ? `Записано: ${name} (${Math.round(span)} с)` : 'Не сохранилось: нужен tools/serve.py');
+}
+
 function onFrame(ctx, frame) {
+  if (DEBUG) record(frame);
   const screen = app.screen();
   screen?.frame?.(frame, ctx);
   draw.clear();
