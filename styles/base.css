@@ -315,7 +315,9 @@ body:not([data-state="LIVE"]) .feed { display: none; }
 @media (max-width: 640px) {
   .sound-hint { display: none; }
   .hud__counter { bottom: calc(var(--safe-b) + 140px); }
-  .feed { left: var(--gutter); right: var(--gutter); width: auto; top: auto; bottom: calc(var(--safe-b) + 300px); max-height: 24vh; }
+  /* Лента на телефоне: справа под таймером, две последние реплики, чтобы не закрывать человека в центре */
+  .feed { left: auto; right: var(--gutter); width: min(72vw, 300px); top: calc(var(--safe-t) + 124px); bottom: auto; max-height: none; justify-content: flex-start; }
+  .feed > :nth-last-child(n + 3) { display: none; }
   .position { top: calc(var(--safe-t) + 116px); padding: 14px 14px 12px; }
   .position__place { font-size: 14px; }
   .position__check { font-size: 14px; padding: 7px 12px 7px 9px; }
