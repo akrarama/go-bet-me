@@ -14,7 +14,7 @@
 // RESULT: reaction(botId) = что бот сказал на финише этого челленджа.
 //
 // Слушает: state, live:start, count, fault, rejected, camera:lost, camera:back, live:end, comment,
-//   peer:pending, peer:ready, peer:error, friend:join, friend:leave.
+//   peer:pending, peer:ready, peer:error, friend:join, friend:leave, stake:raised (игрок поднял ставку: bots.reopen).
 // Шлёт: bet {bet, challenge}, comment {from, text, avatar, id, bot}.
 // Реплики и чистые помощники (LINES, FAULT_LINES, fill, pickLine, faultTheme, arrive) проверяет tests/money.test.js.
 
@@ -253,6 +253,7 @@ let link = 'none'; // есть ли ссылка для друзей: 'none' | '
 const watching = new Set(); // id друзей, которые сейчас смотрят
 const enteredAt = new WeakMap(); // челлендж → когда в него первый раз вошли (мс)
 const turnedAway = new WeakMap(); // челлендж → id ботов, которым не хватило места в пуле
+let app = null; // приложение (ctx.app из init): нужно знать, идёт ли LOBBY
 
 const between = ([a, b]) => a + Math.random() * (b - a);
 
@@ -492,6 +493,7 @@ function leave(el) {
 export const bots = {
   /** Один раз при запуске (main.js): лента, реплики в LIVE, отмена ставок на Старте, debug-клавиша. */
   init(ctx) {
+    app = ctx.app;
     feed = $('#feed');
     bus.on('comment', post);
     bus.on('state', onState);
@@ -515,6 +517,7 @@ export const bots = {
     });
     bus.on('friend:join', ({ id }) => watching.add(id));
     bus.on('friend:leave', ({ id }) => watching.delete(id));
+    bus.on('stake:raised', ({ challenge }) => bots.reopen(challenge)); // игрок поднял ставку: место в пуле появилось
     ctx.debug.key('b', () => ctx.app.state === 'LOBBY' && arriveNow(), 'боты: поставить сразу');
   },
 
@@ -536,6 +539,17 @@ export const bots = {
         }, at);
         return a;
       });
+  },
+
+  /**
+   * Игрок поднял ставку (stake:raised), в пуле снова есть место. Боты, которым сказали «пул полон», получают второй шанс,
+   * но настоящие друзья снова успевают первыми: ожидание из friendWait отсчитывается заново. lobby: идёт ли сейчас LOBBY.
+   */
+  reopen(challenge, { lobby = app?.state === 'LOBBY' } = {}) {
+    if (!challenge) return;
+    turnedAway.delete(challenge);
+    enteredAt.set(challenge, Date.now());
+    if (lobby) this.join(challenge);
   },
 
   /** Что бот сказал на финише текущего челленджа (для RESULT), null если ничего. */

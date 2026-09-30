@@ -4,7 +4,8 @@
 // Каждое сообщение это JSON-объект с полем t (по каналу идёт строка JSON, serialization 'raw').
 //   друг → хост:  hello {name, avatar} | bet {amount} | react {text} | ping {}
 //   хост → друг:  lobby {challenge, left, bets, you, open, note}
-//                   при подключении, при каждом изменении пула и когда хост входит в LOBBY, LIVENESS или SETUP
+//                   при подключении, при каждом изменении пула (в том числе когда игрок поднял ставку: stake и left выросли,
+//                   у друга снова живые кнопки) и когда хост входит в LOBBY, LIVENESS или SETUP
 //                   open: true, пока идут ставки (хост в LOBBY); note: 'starting' (игрок в LIVENESS, ставки закрыты
 //                   на секунды) | 'setup' (игрок вернулся в настройки) | null
 //                 bet:ok {amount}         ставка принята (в пуле именно столько)

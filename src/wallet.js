@@ -21,7 +21,8 @@
 // Ключ хранилища: MONEY.storageKey + путь страницы, чтобы копии на одном localhost не делили кошелёк.
 
 import { MONEY } from './config.js';
-import { settle as settleMoney, refundAll, toCents, fromCents, formatCredits } from './money.js';
+import { settle as settleMoney, refundAll, raiseInfo, raiseStake, toCents, fromCents, formatCredits } from './money.js';
+import { bus } from './bus.js';
 
 const VERSION = 1;
 const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -461,6 +462,22 @@ export const wallet = {
 
   canAfford(amount) {
     return get().canAfford(amount);
+  },
+
+  /** Кнопка «Поднять ставку» в LOBBY (gestures): показывать ли и можно ли нажать. → { status, from, next, visible, enabled }, см. money.raiseInfo. */
+  raiseInfo(challenge) {
+    return raiseInfo(challenge, { balance: get().balance });
+  },
+
+  /**
+   * «Хочешь больше, поднимаешь свою»: пул полон, игрок в LOBBY поднимает ставку на MONEY.raiseStep, если хватает кредитов.
+   * При успехе меняет challenge.stake и шлёт stake:raised {challenge, from, to}: host.js разошлёт друзьям lobby с новым
+   * остатком, bots.js вернёт ботов, которым не хватило места. Возвращает { status, from, stake, left }.
+   */
+  raiseStake(challenge) {
+    const r = raiseStake(challenge, { balance: get().balance });
+    if (r.status === 'ok') bus.emit('stake:raised', { challenge, from: r.from, to: r.stake });
+    return r;
   },
 
   /** Пополнить до MONEY.startBalance. Тост и анимация фишки сами. Возвращает, сколько добавили. */

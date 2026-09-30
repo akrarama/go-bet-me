@@ -8,7 +8,8 @@ import { createHostCore } from '../src/friends/host.js';
 import { createGuestCore } from '../src/friends/guest.js';
 import { createGuestWallet } from '../src/friends/guest-wallet.js';
 import { installHost, createGuest, makeId, joinUrl } from '../src/friends/peer.js';
-import { friendWait } from '../src/friends/bots.js';
+import { friendWait, bots } from '../src/friends/bots.js';
+import { ui } from '../src/ui.js';
 import { cleanText, cleanName, cleanAvatar, parseWire, parseFriendMsg, parseHostMsg, pubBets, pubChallenge, betId, isPeerBet } from '../src/friends/protocol.js';
 
 // ─── Помощники ──────────────────────────────────────────────────
@@ -729,6 +730,54 @@ export default function friendsTests(t) {
     a.eq(r.bus.of('bet:withdrawn').length, 0);
     a.deep(r.bus.of('friend:leave'), [{ id: 'spec' }]);
     a.eq(r.core.round.bets.length, 1);
+  });
+
+  t.test('хост: игрок поднял ставку, друзья получают lobby с новым остатком и ставкой', (a) => {
+    const r = hostRig({ stake: 10, bets: [BOT('Дима'), BOT('Аня')] }); // пул полон
+    const f = r.friend('f1');
+    a.eq(f.last('lobby').left, 0);
+    a.eq(f.last('bet:full'), undefined);
+    const before = f.of('lobby').length;
+    r.app.challenge.stake = 15; // так меняет ставку wallet.raiseStake
+    r.bus.emit('stake:raised', { challenge: r.app.challenge, from: 10, to: 15 });
+    a.eq(f.of('lobby').length, before + 1, 'друг получил новое lobby');
+    a.eq(f.last('lobby').left, 5);
+    a.eq(f.last('lobby').challenge.stake, 15);
+    a.deep([f.last('lobby').open, f.last('lobby').note], [true, null]);
+    r.bus.emit('stake:raised', { challenge: { id: 'другой' }, from: 10, to: 15 });
+    a.eq(f.of('lobby').length, before + 1, 'чужой челлендж не в счёт');
+    r.say('f1', { t: 'bet', amount: 5 });
+    a.deep(f.last('bet:ok'), { t: 'bet:ok', amount: 5 }, 'друг занял освободившееся место');
+    a.eq(r.app.challenge.bets.length, 3);
+    a.eq(f.last('lobby').left, 0, 'и пул снова полон');
+    r.bus.emit('stake:raised', {});
+    a.eq(f.of('lobby').length, before + 2, 'событие без челленджа ничего не рассылает');
+  });
+
+  t.test('боты: игрок поднял ставку, отказанный бот получает второй шанс', async (a) => {
+    const savedToast = ui.toast;
+    ui.toast = () => {}; // тосты «пул полон» в jsc без страницы
+    try {
+      await withFakeTimers(async ({ fire, queue }) => {
+        const ch = { id: 'cR', type: 'squat', target: 10, stake: 10, bets: [{ id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true }, { id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5, bot: false }] };
+        bots.join(ch);
+        fire(); // Аня приходит, а места нет
+        a.eq(ch.bets.length, 2, 'пул полон: Аню не взяли');
+        ch.stake = 15; // игрок поднял ставку
+        bots.join(ch);
+        a.eq(queue.filter((q) => q.live).length, 0, 'без reopen Аня считается отказанной и не идёт');
+        bots.reopen(ch, { lobby: false });
+        a.eq(queue.filter((q) => q.live).length, 0, 'вне LOBBY второй шанс запомнен, но не запущен');
+        bots.reopen(ch, { lobby: true });
+        a.eq(queue.filter((q) => q.live).length, 1, 'в LOBBY Аня снова идёт ставить');
+        fire();
+        a.deep(ch.bets.map((b) => b.id), ['bot-dima', 'peer:f1', 'bot-anya'], 'Аня заняла новое место');
+        a.eq(poolLeft(ch), 0);
+        bots.reopen(null);
+      });
+    } finally {
+      ui.toast = savedToast;
+    }
   });
 
   // ── Хост: LIVE ──
