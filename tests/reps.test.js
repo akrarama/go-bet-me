@@ -203,6 +203,32 @@ function setup(mod, { target = 10, voice = false } = {}) {
   return { ctrl, feedback, events, of, spoken, sounds, clock, feed, synth, get t() { return t; } };
 }
 
+
+/**
+ * Трасса настоящего ролика (fixtures/traces, в git не лежит): кадры → контроллер, 15 fps.
+ * Только в jsc (readFile) и только если трасса есть рядом с репо, иначе null.
+ */
+function replayTrace(name, mod) {
+  let data = null;
+  try {
+    data = typeof readFile === 'function' ? JSON.parse(readFile(`../fixtures/traces/${name}.json`)) : null;
+  } catch {
+    data = null;
+  }
+  if (!data) return null;
+  const s = setup(mod, { target: 999 });
+  const { fps, width, height } = data.input;
+  data.frames.forEach((f, i) => {
+    const t = 1 + (i * 1000) / fps;
+    const raw = Array.isArray(f) ? f : f?.lm;
+    const lm = raw ? raw.map(([x, y, z, visibility]) => ({ x, y, z, visibility })) : null;
+    s.clock.to(t);
+    if (i === 0) s.ctrl.start(t);
+    s.ctrl.frame({ t, ran: 'pose', width, height, pose: { t, landmarks: lm } }, t);
+  });
+  return s;
+}
+
 const STAND = { knee: 176, shin: 4, lean: 4 };
 const DEEP = { knee: 78, shin: 28, lean: 32 };
 const TOP = { elbow: 172 };
@@ -459,23 +485,23 @@ export default (t) => {
   t.test('отжимания: недожал вниз: угол в тексте, в лог «недостаточная глубина»', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(rep(pushupPose, TOP, { elbow: 112 }, 1400));
+    s.feed(rep(pushupPose, TOP, { elbow: 135 }, 1400));
     s.feed(hold(pushupPose(TOP), 10));
     a.eq(s.ctrl.count, 0);
     a.deep(s.of('rejected').map((e) => [e.code, e.text]), [['pushup_half_down', 'недостаточная глубина']]);
     const f = s.of('fault')[0];
-    a.ok(/^Не до конца опускаешься: локоть 1[12]\d°, нужно меньше 90°$/.test(f.text), f.text);
+    a.ok(/^Не до конца опускаешься: локоть 1[34]\d°, нужно меньше 125°$/.test(f.text), f.text);
   });
 
   t.test('отжимания: не выпрямил руки: угол в тексте', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(seq(pushupPose, [0, TOP], [700, LOW], [1100, { elbow: 140 }], [1500, LOW], [2200, TOP]));
+    s.feed(seq(pushupPose, [0, TOP], [700, LOW], [1100, { elbow: 143 }], [1500, LOW], [2200, TOP]));
     s.feed(hold(pushupPose(TOP), 10));
     a.eq(s.ctrl.count, 1);
     a.deep(s.of('rejected').map((e) => e.code), ['pushup_half_up']);
     const f = s.of('fault').find((e) => e.code === 'pushup_half_up');
-    a.ok(/^Не выпрямил руки: локоть 1[34]\d°, нужно больше 160°$/.test(f.text), f.text);
+    a.ok(/^Не выпрямил руки: локоть 1[34]\d°, нужно больше 150°$/.test(f.text), f.text);
   });
 
   t.test('отжимания: таз провис во время повтора: не засчитан', (a) => {
@@ -501,7 +527,7 @@ export default (t) => {
   t.test('отжимания: слишком быстро: засчитан, но подсказка про темп', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(seq(pushupPose, [0, TOP], [500, LOW], [700, TOP]));
+    s.feed(seq(pushupPose, [0, TOP], [300, LOW], [450, TOP]));
     s.feed(hold(pushupPose(TOP), 10));
     a.eq(s.ctrl.count, 1);
     a.deep(s.of('fault').map((e) => e.code), ['pushup_tempo']);
@@ -627,7 +653,7 @@ export default (t) => {
   t.test('подсказка в упражнении: суставы правила красные, после исправления гаснут', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 20));
     a.eq(s.feedback.current?.text, 'Таз провисает, напряги живот, выровняй тело');
     a.deep([...s.feedback.highlight], [23]);
     s.feed(hold(pushupPose(TOP), 70));
@@ -638,7 +664,7 @@ export default (t) => {
   t.test('приоритет: видимость важнее формы', (a) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
-    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 14));
+    s.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 20));
     a.eq(s.feedback.current?.code, 'hip_sag');
     s.feed(hold(pushupPose({ ...TOP, sag: 0.07, vis: 0.3, farVis: 0.2 }), 12));
     a.eq(s.feedback.current?.code, 'visibility');
@@ -648,18 +674,40 @@ export default (t) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
     // таз провис всё время, и повтор мелкий: на экране форма, в логе причина тоже форма
-    s.feed(rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, { elbow: 112 }, 1400));
+    s.feed(rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, { elbow: 135 }, 1400));
     a.eq(s.feedback.current?.code, 'hip_sag');
     a.deep(s.of('rejected').map((e) => e.code), ['hip_sag']);
     a.ok(s.of('fault').some((e) => e.code === 'pushup_half_down'), 'глубина всё равно посчитана в ошибках');
     // быстрый повтор сразу после мелкого: на экране глубина, темп ждёт
     const q = setup(pushup);
     q.feed(hold(pushupPose(TOP), 10));
-    q.feed(rep(pushupPose, TOP, { elbow: 112 }, 1000));
-    q.feed(seq(pushupPose, [0, TOP], [450, LOW], [650, TOP]));
+    q.feed(rep(pushupPose, TOP, { elbow: 135 }, 1000));
+    q.feed(seq(pushupPose, [0, TOP], [300, LOW], [450, TOP]));
     q.feed(hold(pushupPose(TOP), 6));
     a.eq(q.feedback.current?.code, 'pushup_half_down');
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
+  });
+
+
+  // ─── Настоящие ролики (калибровка порогов) ───
+  t.test('ролик: приседания сбоку: 5 засчитано, шестой не засчитан за наклон спины', (a) => {
+    const s = replayTrace('squat-side', squat);
+    if (!s) return;
+    a.eq(s.ctrl.count, 5);
+    a.deep(s.of('rejected').map((e) => e.code), ['torso_lean']);
+  });
+
+  t.test('ролик: отжимания сбоку: 3 полных повтора (четвёртый обрезан заставкой)', (a) => {
+    const s = replayTrace('pushup-side-short', pushup);
+    if (!s) return;
+    a.eq(s.ctrl.count, 3);
+    a.eq(s.of('rejected').length, 0);
+  });
+
+  t.test('ролик: отжимания с разных ракурсов: 13, спереди счёт на паузе', (a) => {
+    const s = replayTrace('pushup-horizontal', pushup);
+    if (!s) return;
+    a.eq(s.ctrl.count, 13);
   });
 
   // ─── Итоги ───
@@ -667,7 +715,7 @@ export default (t) => {
     const s = setup(pushup);
     s.feed(hold(pushupPose(TOP), 10));
     for (let i = 0; i < 3; i++) {
-      s.feed(rep(pushupPose, TOP, { elbow: 112 }, 1400));
+      s.feed(rep(pushupPose, TOP, { elbow: 135 }, 1400));
       s.feed(hold(pushupPose(TOP), 5));
     }
     s.feed(rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, LOW, 1600));

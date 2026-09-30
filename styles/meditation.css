@@ -1,2 +1,87 @@
-/* Стили блока 4 (Медитация): жизни, таймер медитации.
-   Токены (цвета, шрифты, радиусы) берём из base.css, свои не заводим. */
+/* Стили блока 4 (Медитация), вид «Аура»: статус под таймером LIVE.
+   Корень .med создаёт src/exercises/meditation-view.js в #stage: поверх холста (z 2), но под экраном
+   LIVE (z 3), поэтому отсчёт 3-2-1, «Камера пропала» и финал его накрывают.
+   Токены (цвета, шрифты, радиусы, easing) только из base.css, свои не заводим. */
+
+.med {
+  position: absolute; z-index: 2; left: 0; right: 0;
+  top: calc(var(--safe-t) + 124px); /* под чипами таймера и ставки (64px + их высота) */
+  display: grid; justify-items: center;
+  pointer-events: none;
+}
+
+/* Группы чипов лежат в одной клетке сетки и сменяют друг друга плавно, без прыжков раскладки */
+.med__group {
+  grid-area: 1 / 1;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+  /* не заезжать на ленту комментов справа (340px) и симметрично слева */
+  max-width: calc(100vw - 2 * (var(--gutter) + min(340px, 34vw) + 8px));
+  opacity: 0; visibility: hidden;
+  transform: translateY(-6px) scale(0.97);
+  transition: opacity 0.35s var(--ease-out), transform 0.35s var(--ease-out), visibility 0s 0.35s;
+}
+.med[data-mode="grace"] .med__group--grace,
+.med[data-mode="main"] .med__group--main,
+.med[data-mode="lost"] .med__group--lost,
+.med[data-mode="two"] .med__group--two {
+  opacity: 1; visibility: visible; transform: none;
+  transition: opacity 0.5s var(--ease-out) 0.08s, transform 0.6s var(--ease-spring) 0.08s, visibility 0s;
+}
+
+/* Чип: стекло как у таймера, тон задаёт иконка, рамка и лёгкая подкраска */
+.med__chip {
+  gap: 8px; padding: 7px 14px 7px 10px;
+  transition: background-color 0.45s var(--ease-out), border-color 0.45s var(--ease-out), box-shadow 0.45s var(--ease-out);
+}
+.med__icon {
+  width: 20px; height: 20px; flex: none; overflow: visible;
+  fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  color: var(--faint);
+  transition: color 0.45s var(--ease-out);
+}
+.med__i { transition: opacity 0.3s var(--ease-out); }
+
+.med__chip[data-tone="ok"] { border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.med__chip[data-tone="ok"] .med__icon { color: var(--accent); filter: drop-shadow(0 0 5px var(--accent-glow)); }
+.med__chip[data-tone="warn"] {
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--warn) 62%, transparent);
+}
+.med__chip[data-tone="warn"] .med__icon { color: var(--warn); }
+.med__chip[data-tone="danger"] {
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+  border-color: color-mix(in srgb, var(--danger) 72%, transparent);
+  box-shadow: 0 0 0 3px var(--danger-glow);
+}
+.med__chip[data-tone="danger"] .med__icon { color: var(--danger); }
+
+/* Глаза: закрытые (дуга с ресницами) и открытые (разрез со зрачком) сменяются плавно */
+.med__chip:not([data-state="open"]) .med__i--open,
+.med__chip[data-state="open"] .med__i--closed { opacity: 0; }
+
+/* Голова: неподвижна (точка в центре) или двигается (дуги по бокам, лёгкое покачивание) */
+.med__chip:not([data-state="move"]) .med__i--move,
+.med__chip[data-state="move"] .med__i--still { opacity: 0; }
+.med__chip[data-state="move"] .med__i--move { animation: med-sway 1.4s var(--ease-out) infinite; }
+@keyframes med-sway { 0%, 100% { transform: translateX(-1.3px); } 50% { transform: translateX(1.3px); } }
+
+/* «Настройся»: кольцо заполняется за первые 5 с (шаг раз в секунду, между шагами переход).
+   linear здесь не кривая, а ровная скорость отсчёта, как у .spinner в base.css: с ease-out кольцо дёргалось бы каждую секунду */
+.med__ring-track { stroke: var(--line-strong); }
+.med__ring-fill {
+  stroke: var(--accent); stroke-width: 2.2;
+  stroke-dasharray: 100; stroke-dashoffset: 100;
+  transform: rotate(-90deg); transform-origin: 10px 10px;
+  transition: stroke-dashoffset 1s linear;
+}
+
+/* Телефон: лента комментов уходит вниз, чипам доступна вся ширина */
+@media (max-width: 640px) {
+  .med__group { max-width: calc(100vw - 2 * var(--gutter)); gap: 6px; }
+  .med__chip { gap: 6px; padding: 6px 12px 6px 8px; font-size: 13px; }
+  .med__icon { width: 18px; height: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .med__chip[data-state="move"] .med__i--move { animation: none; }
+}

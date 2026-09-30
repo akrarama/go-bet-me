@@ -35,6 +35,7 @@ const isOpen = (h) => h.kind === 'round' && (h.status === 'held' || h.status ===
 export function createWallet({ storage = null, key = MONEY.storageKey, start = MONEY.startBalance, fee = MONEY.APP_FEE, keep = MONEY.historyMax, now = () => Date.now() } = {}) {
   const listeners = new Set();
   let state = load();
+  let orphan = null; // live:end без live:start (финиш клавишей во время отсчёта): денег не было
 
   function fresh() {
     return { v: VERSION, cents: toCents(start), history: [{ id: uid('p'), kind: 'profile', at: now(), balanceAfter: start }] };
@@ -121,6 +122,7 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
     /** live:start: списать ставку игрока. Ставки против в этот момент закрыты: берём снимок. */
     hold(challenge) {
       this.recover('replaced');
+      orphan = null;
       const S = Math.max(0, toCents(challenge.stake));
       const round = {
         id: uid('r'),
@@ -146,7 +148,11 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
     /** live:end: запомнить результат. Выплата позже, на экране итогов. */
     end(session) {
       const r = this.open;
-      if (!r || r.status !== 'held' || (session?.challengeId != null && r.challengeId !== session.challengeId)) return null;
+      if (!r || r.status !== 'held' || (session?.challengeId != null && r.challengeId !== session.challengeId)) {
+        orphan = session?.challengeId ?? null;
+        return null;
+      }
+      orphan = null;
       Object.assign(r, {
         status: 'ended',
         success: !!session.success,
@@ -161,7 +167,7 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
 
     /** RESULT: применить расчёт один раз. Повторный вызов возвращает ту же запись и ничего не платит. */
     settle(challengeId) {
-      const r = latest(challengeId);
+      const r = challengeId != null && challengeId === orphan ? null : latest(challengeId);
       if (!r) return null;
       if (r.status === 'ended') pay(r);
       return r.settlement ? { round: r, settlement: r.settlement } : null;
@@ -269,11 +275,12 @@ const chip = {
     const from = this.shown;
     const t0 = performance.now();
     const ms = 900;
-    const step = (t) => {
-      const k = Math.min(1, (t - t0) / ms);
+    const step = () => {
+      // от performance.now(), а не от метки кадра: та бывает раньше t0 или отстаёт (виртуальное время)
+      const k = Math.min(1, Math.max(0, (performance.now() - t0) / ms));
       const e = 1 - (1 - k) ** 3;
       this.shown = k < 1 ? from + (balance - from) * e : balance;
-      this.value.textContent = formatCredits(this.shown);
+      this.value.textContent = formatCredits(k < 1 ? Math.round(this.shown) : balance); // по пути целые, без мелькания дробей
       if (k < 1) this.raf = requestAnimationFrame(step);
     };
     this.raf = requestAnimationFrame(step);
