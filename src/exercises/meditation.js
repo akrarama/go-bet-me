@@ -1,33 +1,42 @@
 // Медитация. Владелец: блок 4 (Медитация).
 // Таймер (count, секунды) идёт, только пока в кадре одно лицо, глаза закрыты и голова неподвижна.
-// Нарушения (раздел 6 спеки), каждое: минус жизнь, подсказка текстом и голосом, событие fault:
+// Нарушения (раздел 6 спеки), каждое: минус жизнь, подсказка текстом и звуком ошибки, событие fault:
 //   лица нет ≥ 2 с; второе лицо ≥ 1 с; глаза открыты ≥ 2 с;
 //   голова двигается: нос сместился больше чем на 4% ширины кадра за 1 с (держится 400 мс или 8 кадров).
 // Первые 5 с после старта нарушения не считаются. Одно и то же нарушение не списывает жизни подряд,
-// пока его не исправили (условия нет 1 с). После нарушения 3 с на исправление: другое нарушение
-// за это время ждёт и списывает жизнь, только если его так и не исправили.
-// 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть и услышать). count ≥ цели: done.
+// пока его не исправили (условия нет 1 с, и это видно: лицо в кадре). После нарушения 3 с на исправление:
+// другое нарушение за это время ждёт и списывает жизнь, только если его так и не исправили.
+// Подсказка нового нарушения 1.5 с держится поверх старых: каждая списанная жизнь со своей причиной.
+// 0 жизней: failed (через 1.5 с, чтобы подсказку успели увидеть). count ≥ цели: done.
 // Пороги: config.MEDITATION. Контракт контроллера: см. squat.js.
 // Отладка (?debug=1): e глаза авто/закрыты/открыты, n дёрнуть головой, l лицо пропало, y второе лицо.
 
 import { MEDITATION as M } from '../config.js';
 import { ema } from '../vision/geometry.js';
-import { blink, nose, noseTracker, primaryIndex } from '../vision/face.js';
+import { blink, nose, noseTracker, primaryIndex, shiftW } from '../vision/face.js';
 
-/** Правила по приоритету: видимость > второй человек > глаза > голова. label: строка для итогов. */
+/**
+ * Правила по приоритету: видимость > второй человек > глаза > голова. label: строка для итогов.
+ * needsFace: без лица не видно, исправил ли; needsWindow: движение видно, только когда окно носа полное.
+ */
 export const RULES = [
   { code: 'face_lost', holdMs: M.faceLostMs, priority: 4, text: 'Лицо вышло из кадра, вернись', label: 'лицо вышло из кадра' },
   { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек, ты должен быть один', label: 'второй человек в кадре' },
-  { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', label: 'глаза открыты' },
-  { code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', label: 'голова двигалась' },
+  { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', label: 'глаза открыты', needsFace: true },
+  {
+    code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', label: 'голова двигалась',
+    needsFace: true, needsWindow: true,
+  },
 ];
 
 const INTRO = 'Закрой глаза и замри';
+const FRESH = 10; // добавка к приоритету свежего нарушения: выше любого правила
 const round1 = (v) => Math.round(v * 10) / 10;
 
 export function createController({ challenge, bus, feedback, debug }) {
   const track = noseTracker(M.headWindowMs);
   const rules = RULES.map((rule) => ({ rule, since: null, lastOn: 0, frames: 0, fired: false, shown: false, count: 0 }));
+  const byCode = Object.fromEntries(rules.map((s) => [s.rule.code, s]));
   let started = false;
   let t0 = 0;
   let last = 0;
@@ -40,6 +49,10 @@ export function createController({ challenge, bus, feedback, debug }) {
   let eyeLevel = null;
   let closed = null;
   let streak = 0;
+  let lastFaceAt = -Infinity; // когда последний раз видели лицо медитирующего
+  let lastTwoAt = -Infinity; // когда последний раз в кадре было два лица
+  let jumpSince = null; // одинокое лицо далеко от прошлого носа: с какого кадра
+  let fresh = null; // { code, until }: подсказка нового нарушения поверх старых
 
   const c = {
     model: 'face',
@@ -76,10 +89,12 @@ export function createController({ challenge, bus, feedback, debug }) {
       last = t;
       const stale = gap > M.maxFrameGapMs;
       if (stale) {
-        // кадров долго не было (камера, скрытая вкладка): это время не считаем, окна начинаем заново
+        // кадров долго не было (камера, скрытая вкладка): это время не считаем, окна начинаем заново,
+        // а исправленным нарушение за это время не считается: его просто не было видно
         track.reset();
         for (const s of rules) {
-          if (!s.fired) s.since = null;
+          if (s.fired) s.lastOn = t;
+          else s.since = null;
           s.frames = 0;
         }
       }
@@ -89,25 +104,44 @@ export function createController({ challenge, bus, feedback, debug }) {
       const res = (c.faceData = simulate(frame.face, t));
       const faces = res?.faces ?? [];
       const n = faces.length;
+      if (n > 1) lastTwoAt = t;
+      let i = n ? primaryIndex(faces, prevNose, aspect) : -1;
+      // Второй человек рядом, а модель на кадр потеряла медитирующего и видит только того:
+      // одинокое лицо далеко от прошлого носа. Медитирующего не видно; держится 3 с: значит, это он.
+      const far = n === 1 && prevNose && shiftW(nose(faces[0]), prevNose, aspect) > M.jumpMax;
+      if (far && !stale && (jumpSince != null || t - lastTwoAt < M.faceLostMs)) {
+        jumpSince ??= t;
+        if (t - jumpSince < M.jumpAcceptMs) i = -1;
+        else {
+          jumpSince = null;
+          track.reset(); // скачок к этому лицу не движение головы
+        }
+      } else jumpSince = null;
+      const face = i >= 0 ? faces[i] : null;
+
       let shift = 0;
       let moving = false;
-      let i = -1;
-      if (n) {
-        i = primaryIndex(faces, prevNose, aspect);
-        prevNose = nose(faces[i]);
+      if (face) {
+        lastFaceAt = t;
+        prevNose = nose(face);
         track.push(t, prevNose);
         shift = track.shift(aspect);
         moving = shift > M.headMoveMax;
         const b = blink(res.blendshapes?.[i]);
-        eyeLevel = b == null ? null : ema(eyeLevel, b, M.eyesEma);
-        if (eyeLevel == null) closed = null;
-        else if (eyeLevel > M.eyesClosedMin) closed = true;
-        else if (closed !== true || eyeLevel < M.eyesClosedMin - M.eyesHysteresis) closed = false;
-      } else {
-        prevNose = null;
-        eyeLevel = null;
-        closed = null;
+        if (b != null) {
+          eyeLevel = ema(eyeLevel, b, M.eyesEma);
+          if (eyeLevel > M.eyesClosedMin) closed = true;
+          else if (closed !== true || eyeLevel < M.eyesClosedMin - M.eyesHysteresis) closed = false;
+        }
+      } else if (!n) {
+        // лица нет: окно носа заново (вернётся в другом месте: это не движение головы),
+        // а глаза и место носа помним, пока пропажа короткая (кадр без лица не сбивает гистерезис)
         track.reset();
+        if (t - lastFaceAt > M.gapMs) {
+          prevNose = null;
+          eyeLevel = null;
+          closed = null;
+        }
       }
 
       const grace = t < graceEnd;
@@ -125,7 +159,7 @@ export function createController({ challenge, bus, feedback, debug }) {
         moving = false;
       }
 
-      const calm = n === 1 && closed === true && !moving;
+      const calm = Boolean(face) && n === 1 && closed === true && !moving;
       if (calm) {
         c.count += dt;
         streak += dt;
@@ -136,7 +170,13 @@ export function createController({ challenge, bus, feedback, debug }) {
       }
       c.done = c.count >= challenge.target;
 
-      const on = { face_lost: n === 0, two_faces: n > 1, eyes_open: n > 0 && closed === false, head_moving: n > 0 && moving };
+      const on = {
+        face_lost: !face,
+        // медитирующего не видно, а второй остался: уже списанное нарушение не считаем исправленным
+        two_faces: n > 1 || (!face && n > 0 && byCode.two_faces.fired),
+        eyes_open: Boolean(face) && closed === false,
+        head_moving: Boolean(face) && moving,
+      };
       let pending = null;
       let active = null;
       for (const s of rules) {
@@ -145,10 +185,14 @@ export function createController({ challenge, bus, feedback, debug }) {
           if (s.since == null) s.since = t;
           s.lastOn = t;
           if (s.fired) {
-            // нарушение ещё не исправили: подсказка держится, жизнь второй раз не списываем
+            // нарушение ещё не исправили: подсказка держится (без звука), жизнь второй раз не списываем;
+            // пока свежая подсказка другого нарушения на экране, свою не просим
             active ??= rule.code;
             s.shown = true;
-            feedback.hint(rule.text, { level: 'warn', priority: rule.priority, code: rule.code });
+            const freshOn = fresh && t < fresh.until;
+            if (!freshOn || fresh.code === rule.code) {
+              feedback.hint(rule.text, { level: 'warn', priority: rule.priority + (freshOn ? FRESH : 0), code: rule.code, speak: false });
+            }
             continue;
           }
           if (grace) continue;
@@ -162,17 +206,18 @@ export function createController({ challenge, bus, feedback, debug }) {
         } else {
           s.frames = 0;
           if (s.since == null) continue;
-          const off = t - s.lastOn;
           if (s.fired) {
             if (s.shown) {
               s.shown = false;
               feedback.clear(rule.code);
             }
-            if (off >= M.fixedMs) {
+            // лица не видно или окно носа ещё не набралось: нельзя сказать, что исправил
+            if ((rule.needsFace && !face) || (rule.needsWindow && track.span < M.headWindowMs)) s.lastOn = t;
+            else if (t - s.lastOn >= M.fixedMs) {
               s.fired = false;
               s.since = null;
             }
-          } else if (off > M.gapMs) s.since = null;
+          } else if (t - s.lastOn > M.gapMs) s.since = null;
         }
       }
 
@@ -205,7 +250,10 @@ export function createController({ challenge, bus, feedback, debug }) {
     s.count += 1;
     nextFaultAt = t + M.cooldownMs;
     c.lives = Math.max(0, c.lives - 1);
-    feedback.hint(rule.text, { level: 'warn', priority: rule.priority, code: rule.code });
+    // новое нарушение видно и слышно сразу, даже если на экране подсказка старше: жизнь не уходит молча
+    fresh = { code: rule.code, until: t + M.freshHintMs };
+    feedback.clearNow();
+    feedback.hint(rule.text, { level: 'warn', priority: rule.priority + FRESH, code: rule.code });
     bus.emit('fault', { code: rule.code, text: rule.text, joints: [], lives: c.lives });
     if (c.lives === 0) failAt = t + M.failDelayMs;
   }
