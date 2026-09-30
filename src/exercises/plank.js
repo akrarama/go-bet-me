@@ -13,7 +13,7 @@
 
 import { REPS, VISION } from '../config.js';
 import { angle, dist } from '../vision/geometry.js';
-import { alphaFor, createHolds, createSight, drawAngle, PRIORITY } from './reps.js';
+import { alphaFor, createHolds, createSight, drawAngle, PRIORITY, readyResult, SIDE_CHECK } from './reps.js';
 import { GATES as PUSHUP_GATES, RULES as PUSHUP_RULES, isPlank, measure as pushupMeasure } from './pushup.js';
 
 const SIDE_KEYS = ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'];
@@ -53,6 +53,13 @@ export function readyChecks(m, cfg) {
     { id: 'plank', text: 'Упор лёжа', ok: plank, hint: m != null && !plank ? PUSHUP_GATES.plank.hint : null },
     { id: 'line', text: 'Тело ровное', ok: line, hint },
   ];
+}
+
+/** Мягкая галочка «Боком к камере»: совет, время пойдёт и без неё. */
+function sideCheck(m, lm) {
+  const ok = m != null && SIDE_CHECK.test(m, null, lm);
+  const { id, text, hint } = SIDE_CHECK;
+  return m != null && !ok ? { id, text, ok, hint, soft: true } : { id, text, ok, soft: true };
 }
 
 export function createController({ challenge, bus, feedback, debug }) {
@@ -223,8 +230,9 @@ export function createController({ challenge, bus, feedback, debug }) {
       const checks = [
         { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: sight.hintFor(reason) }) },
         ...readyChecks(m, cfg).map(({ hint, ...check }) => (hint ? { ...check, hint } : check)),
+        sideCheck(m, lm),
       ];
-      return { ok: checks.every((check) => check.ok), checks, hint: checks.find((check) => !check.ok)?.hint ?? null };
+      return readyResult(checks);
     },
 
     stop() {

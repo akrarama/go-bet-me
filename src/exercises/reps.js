@@ -18,6 +18,7 @@
 
 import { REPS, VISION } from '../config.js';
 import { pickSide } from '../vision/geometry.js';
+import { nearSide } from '../vision/smooth.js';
 
 /** Приоритет подсказок и причин незасчёта. */
 export const PRIORITY = { visibility: 4, form: 3, depth: 2, tempo: 1 };
@@ -33,6 +34,31 @@ export const VISIBILITY = {
 export const NOBODY_HINT = 'Не вижу тебя: встань в кадр целиком и проверь свет';
 
 /** Похвала за серию чистых повторов (level ok, без звука). Свои варианты упражнения кладут в def.praise. */
+/**
+ * Мягкая галочка «Боком к камере» (отжимания, планка, брусья, берпи): подсказывает, но старт не держит.
+ * Счёт точнее, когда всё тело видно сбоку, а не обязателен ракурс строго в профиль.
+ * Боком = одна сторона тела видна заметно лучше другой (vision/smooth.js nearSide).
+ */
+export const SIDE_CHECK = {
+  id: 'side',
+  text: 'Боком к камере',
+  hint: 'Встань боком к камере: так скелет виден целиком и счёт точнее',
+  soft: true,
+  test: (m, cfg, lm) => nearSide(lm) != null,
+};
+
+/** Итог галочек: ok по обязательным, hint первой непройденной обязательной, advice: мягкой. */
+export function readyResult(checks) {
+  const hard = checks.filter((chk) => !chk.soft);
+  const soft = checks.filter((chk) => chk.soft && !chk.ok);
+  return {
+    ok: hard.every((chk) => chk.ok),
+    checks,
+    hint: hard.find((chk) => !chk.ok)?.hint ?? null,
+    advice: soft[0]?.hint ?? null,
+  };
+}
+
 export const PRAISE = ['Отлично, темп ровный', 'Чистый повтор, так держать', 'Красиво, техника чистая'];
 const GATE = 'pose_gate'; // код подсказки «поза не для счёта»
 
@@ -305,7 +331,8 @@ export function describeRejected(reasons) {
  *   turn?(ev, cfg) → { rule, value } | null   разворот угла: полуповтор или мало глубины
  *   missDelayMs?           разворот засчитывается ошибкой через столько мс, если поза не сломалась (прыжок)
  *   tempo?(ev, cfg) → { rule, value } | null  конец повтора: темп
- *   checks?: [{ id, text, hint, test(m, cfg) }]  положение до старта («Встань в позицию»): те же условия, что gate
+ *   checks?: [{ id, text, hint, soft?, test(m, cfg, lm) }]  положение до старта («Встань в позицию»): те же условия, что gate
+ *                          (soft: совет, старт не держит, например SIDE_CHECK)
  *                          отбрасывает кадр; text до 22 символов, hint: что сделать; «Всё тело в кадре» (body) добавляет ready сам
  * }
  * Правило: { code, kind, label (коротко, для итогов), hint (текст или (value, cfg) → текст), joints: ключи SIDE }.
@@ -532,12 +559,13 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
       const m = seen ? def.measure({ lm, idx: pick.idx, aspect: aspectOf(frame), sm, cfg, t }) : null;
       const checks = [
         { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: sight.hintFor(reason) }) },
-        ...(def.checks ?? []).map(({ id, text, hint, test }) => {
-          const ok = m != null && Boolean(test(m, cfg));
-          return m != null && !ok && hint ? { id, text, ok, hint } : { id, text, ok };
+        ...(def.checks ?? []).map(({ id, text, hint, test, soft }) => {
+          const ok = m != null && Boolean(test(m, cfg, lm));
+          const chk = m != null && !ok && hint ? { id, text, ok, hint } : { id, text, ok };
+          return soft ? { ...chk, soft: true } : chk;
         }),
       ];
-      return { ok: checks.every((chk) => chk.ok), checks, hint: checks.find((chk) => !chk.ok)?.hint ?? null };
+      return readyResult(checks);
     },
 
     stop() {
