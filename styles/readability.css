@@ -1,0 +1,41 @@
+/* Читаемость текста поверх светлого видео (белая стена, окно). Замер контраста WCAG по реальному фону: блок 4 (meditation).
+   Грузится последним, поэтому перекрывает base.css и стили блоков. Владелец: координатор. */
+
+
+/* Токены: стекло и приглушённый текст чуть плотнее (мелкие подписи на карточках были 3-4:1 вместо 4.5:1) */
+:root { --surface: rgba(18, 18, 22, 0.78); --muted: rgba(245, 245, 247, 0.78); --faint: rgba(245, 245, 247, 0.58); }
+
+/* Меню: камера темнее. Было 0.38: белая стена становилась серой, мелкий текст 1.9-2.5:1 вместо 4.5:1 */
+.stage__scrim { background-color: rgba(10, 10, 12, 0.62); }
+/* LIVE: видео яркое, но не выбеленное */
+body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0.1); }
+
+/* LIVE: мягкая тёмная подложка под счётчиком и подписью, тени у цифр и подписи (читается и на белой стене) */
+.hud__counter { isolation: isolate; }
+.hud__counter::before {
+  content: ''; position: absolute; z-index: -1; inset: -52px -64px -26px -44px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.66) 0%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0) 100%);
+}
+/* подпись «Приседания» над счётчиком: плашка как у остальных чипов, читается на любом видео */
+.hud__label {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; margin-bottom: 8px; border-radius: var(--r-pill);
+  background: var(--surface-strong); border: 1px solid var(--line); color: var(--text); font-size: 15px;
+}
+.counter { text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6), 0 6px 36px rgba(0, 0, 0, 0.6); }
+.counter__target { color: rgba(245, 245, 247, 0.88); }
+
+/* Текст прямо на видео (без карточки): светлее и с тёмным ореолом */
+.sound-hint,
+.subtitle,
+.idle-alt__text,
+.lobby-alt,
+.lobby-start__sub { color: rgba(245, 245, 247, 0.96); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 14px rgba(0, 0, 0, 0.7); }
+
+/* подсказка про звук: своя подложка (в LIVE под ней светлое видео) */
+.chip--ghost.sound-hint { background: var(--surface-strong); border-color: var(--line); }
+
+/* gestures.css: красный для текста на тёмных карточках светлее (был #ff4d4f, на светлом фоне 1.5-3:1) */
+.lobby-bet__amount, .lobby-pool__text b, .setup-note--danger { color: #ff8183; }
+
+/* сердца жизней: на плашке как остальные чипы (красный по яркости тёмный, на светлом видео без плашки его не видно) */
+.lives { width: fit-content; padding: 2px 12px 4px; border-radius: var(--r-pill); background: var(--surface-strong); border: 1px solid var(--line); }
