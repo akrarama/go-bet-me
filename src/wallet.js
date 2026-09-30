@@ -275,11 +275,12 @@ const chip = {
     const from = this.shown;
     const t0 = performance.now();
     const ms = 900;
-    const step = (t) => {
-      const k = Math.min(1, (t - t0) / ms);
+    const step = () => {
+      // от performance.now(), а не от метки кадра: та бывает раньше t0 или отстаёт (виртуальное время)
+      const k = Math.min(1, Math.max(0, (performance.now() - t0) / ms));
       const e = 1 - (1 - k) ** 3;
       this.shown = k < 1 ? from + (balance - from) * e : balance;
-      this.value.textContent = formatCredits(this.shown);
+      this.value.textContent = formatCredits(k < 1 ? Math.round(this.shown) : balance); // по пути целые, без мелькания дробей
       if (k < 1) this.raf = requestAnimationFrame(step);
     };
     this.raf = requestAnimationFrame(step);

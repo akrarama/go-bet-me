@@ -209,17 +209,17 @@ function countUp(root, my) {
   }));
   // скрытая вкладка не крутит кадры: там сразу итог, иначе на экране так и останутся нули
   const still = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches || document.hidden;
-  let t0 = 0;
-  const step = (t) => {
+  // от performance.now(), а не от метки кадра: та бывает раньше или отстаёт (виртуальное время)
+  const t0 = performance.now() + COUNT_DELAY_MS;
+  const step = () => {
     if (my !== pass) return;
-    t0 ||= t + COUNT_DELAY_MS;
-    const k = still ? 1 : Math.min(1, Math.max(0, (t - t0) / COUNT_MS));
+    const k = still ? 1 : Math.min(1, Math.max(0, (performance.now() - t0) / COUNT_MS));
     const e = 1 - (1 - k) ** 3;
     for (const { el, from, to, fmt } of items) el.textContent = fmt(k < 1 ? Math.round(from + (to - from) * e) : to);
     if (k < 1) requestAnimationFrame(step);
   };
   if (!items.length) return;
-  if (still) step(0);
+  if (still) step();
   else requestAnimationFrame(step);
 }
 

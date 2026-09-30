@@ -12,6 +12,8 @@
 // Подключение: контроллер (meditation.js) в draw(frame, draw) зовёт view.draw(frame, draw, c),
 // в stop() зовёт view.destroy(). Контроллер отдаёт c.started, c.target, c.faceData (лица после
 // подмены клавишами отладки), c.view (состояние правил). Стили: styles/meditation.css.
+// c.view.primary верим, только если c.view и c.faceData пришли из одного кадра контроллера (новый объект
+// c.view каждый кадр). primary -1 при лицах в кадре: медитирующего не видно, рядом чужое лицо.
 // Модуль без DOM на верхнем уровне: грузится и в jsc (тесты).
 
 import { VISION, MEDITATION as M } from '../config.js';
@@ -67,7 +69,9 @@ const UY = new Float32Array(LID);
 const LX = new Float32Array(LID);
 const LY = new Float32Array(LID);
 
-const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+/** NaN даёт нижнюю границу: одно битое число не протечёт в холст и в плавные уровни. */
+const clamp = (v, a, b) => (v > a ? (v < b ? v : b) : a);
+const valid = (p) => p != null && Number.isFinite(p.x) && Number.isFinite(p.y);
 /** Доля пути к цели за dt при постоянной времени tau (мс): плавно и не зависит от fps. */
 const ease = (dt, tau) => 1 - Math.exp(-dt / tau);
 const rgba = (c, a) => `rgba(${c[0] | 0}, ${c[1] | 0}, ${c[2] | 0}, ${Math.round(clamp(a, 0, 1) * 1000) / 1000})`;
@@ -130,11 +134,16 @@ function makeFace() {
 /**
  * Новые точки лица → сглаженные. Фильтр как One Euro: пока голова стоит, срез низкий (дрожь уходит),
  * когда движется, срез растёт со скоростью (контур не отстаёт). P: аффинная проекция в px.
+ * Точку без координат (нет в модели на 468 точек, битая) заменяем носом. Лицо без носа и первой точки
+ * не берём: false (тогда рисуем как «лица нет», сглаженные точки не трогаем).
  */
 function feed(s, face, P, dt) {
-  const spare = face[FACE.nose] ?? face[0];
+  const n0 = face?.[FACE.nose];
+  const spare = valid(n0) ? n0 : valid(face?.[0]) ? face[0] : null;
+  if (!spare) return false;
   for (let i = 0; i < N_PTS; i++) {
-    const p = face[PTS[i]] ?? spare;
+    const q = face[PTS[i]];
+    const p = valid(q) ? q : spare;
     RX[i] = P.bx + P.ax * p.x;
     RY[i] = P.by + P.ay * p.y;
   }
@@ -167,12 +176,10 @@ function feed(s, face, P, dt) {
   s.my = my;
   s.ok = true;
   s.iris = face.length >= IRIS_FROM;
-  const n = face[FACE.nose];
-  if (n) {
-    s.nose.x = n.x;
-    s.nose.y = n.y;
-  }
+  s.nose.x = spare.x;
+  s.nose.y = spare.y;
   shape(s);
+  return true;
 }
 
 /** Центр, полуоси (вдоль и поперёк линии глаз) и наклон головы. */
@@ -291,11 +298,23 @@ export function createView() {
   const lv = { energy: 0, breath: 0, vignette: 0, contour: 0, trace: 0, open: 1, lost: 0, move: 0 };
   const raw = { mode: 'idle', tone: 'neutral', eyes: 'neutral', head: 'ok' };
   let st = { mode: 'none', tone: 'neutral', eyes: 'neutral', head: 'ok', key: '' };
-  let pendKey = '';
-  let pendSince = 0;
+  let pendSince = -1; // с какого кадра сырой статус отличается от устоявшегося (-1: не отличается)
   let pal = null;
   let dom = null;
+  let dead = false; // после destroy() чипы больше не создаём
   let ui = {};
+  // c.view и c.faceData, посчитанные контроллером в одном кадре: только тогда верим c.view.primary
+  let pairView = null;
+  let pairData = null;
+  let depth = 0; // незакрытые save(): если что-то бросит, холст не останется с клипом и сдвигом
+  const save = (g) => {
+    g.save();
+    depth++;
+  };
+  const restore = (g) => {
+    g.restore();
+    depth--;
+  };
   let lastT = 0;
   let origin = -1; // когда начали дышать
   let traceP = 0;
@@ -319,7 +338,8 @@ export function createView() {
     const bad = (code) => (v.active === code || (Array.isArray(v.fired) && v.fired.includes(code)) ? 'danger' : 'warn');
     // первые кадры после старта контроллер ещё не посчитал: тоже «настройся»
     if (v.grace > 0 || (n === 0 && !v.pending && !v.active)) return set('grace', 'ok', v.closed === true ? 'ok' : 'neutral');
-    if (n === 0) return set('lost', bad('face_lost'), 'neutral');
+    // primary -1 при лицах в кадре: контроллер не видит медитирующего, в кадре только чужое лицо
+    if (n === 0 || v.primary === -1) return set('lost', bad('face_lost'), 'neutral');
     const eyes = v.closed === true ? 'ok' : v.closed === false ? bad('eyes_open') : 'neutral';
     raw.head = v.moving ? bad('head_moving') : 'ok';
     if (n > 1) return set('two', bad('two_faces'), eyes);
@@ -336,22 +356,23 @@ export function createView() {
 
   const peak = (s) => Math.max(RANK[s.tone], RANK[s.eyes], RANK[s.head]);
 
-  /** Статус меняем, только когда он продержался HOLD_MS. Сразу: смена фазы и списанная жизнь. */
+  /**
+   * Статус меняем, только когда сырой отличается от устоявшегося HOLD_MS подряд (берём последний сырой).
+   * Сразу: смена фазы и списанная жизнь. Сырой скачет между двумя новыми состояниями (глаза открыты,
+   * голова на пороге движения): всё равно сменим, старый «спокойно» не залипнет.
+   */
   function commit(t) {
     const key = `${raw.mode}|${raw.tone}|${raw.eyes}|${raw.head}`;
     if (key === st.key) {
-      pendKey = '';
+      pendSince = -1;
       return false;
     }
-    if (key !== pendKey) {
-      pendKey = key;
-      pendSince = t;
-    }
+    if (pendSince < 0 || t < pendSince) pendSince = t;
     const phase = raw.mode !== st.mode && !(STEADY.has(raw.mode) && STEADY.has(st.mode));
     const alarm = peak(raw) === RANK.danger && peak(raw) > peak(st);
     if (!phase && !alarm && t - pendSince < HOLD_MS) return false;
     st = { mode: raw.mode, tone: raw.tone, eyes: raw.eyes, head: raw.head, key };
-    pendKey = '';
+    pendSince = -1;
     return true;
   }
 
@@ -399,7 +420,7 @@ export function createView() {
     const s = me;
     const c = col.tone;
     const a = e * (0.68 + 0.32 * b);
-    g.save();
+    save(g);
     g.beginPath();
     g.rect(0, 0, W, H);
     oval(g, s);
@@ -407,7 +428,7 @@ export function createView() {
     // мягкий эллипс чуть выше центра: свет из-за головы
     const q = 1 + (s.rh / s.rw - 1) * 0.7;
     const R = s.rw * (1.7 + 0.42 * b);
-    g.save();
+    save(g);
     g.translate(s.cx + s.sin * s.rh * 0.1, s.cy - s.cos * s.rh * 0.1);
     g.rotate(s.roll);
     g.scale(1, q);
@@ -418,7 +439,7 @@ export function createView() {
     grad.addColorStop(1, rgba(c, 0));
     g.fillStyle = grad;
     g.fillRect(-R, -R, 2 * R, 2 * R);
-    g.restore();
+    restore(g);
     // сияние вдоль контура: видна только внешняя половина широких мягких линий
     g.beginPath();
     oval(g, s);
@@ -431,7 +452,7 @@ export function createView() {
     g.lineWidth = s.rw * 0.07;
     g.strokeStyle = rgba(c, 0.16 * a);
     g.stroke();
-    g.restore();
+    restore(g);
   }
 
   /** Контур лица: тонкая светящаяся линия, у макушки ярче, к подбородку мягче. */
@@ -494,7 +515,7 @@ export function createView() {
     }
     if (o > 0.04) {
       // открытый глаз: разрез и радужка внутри него
-      g.save();
+      save(g);
       g.beginPath();
       spline(g, UX, UY, LID, true);
       spline(g, LX, LY, LID, false, true);
@@ -516,7 +537,7 @@ export function createView() {
         g.strokeStyle = rgba(c, o * a);
         g.stroke();
       }
-      g.restore();
+      restore(g);
       g.beginPath();
       spline(g, LX, LY, LID, true);
       g.lineWidth = lw * 0.75;
@@ -571,7 +592,7 @@ export function createView() {
   }
 
   /** Второй человек: красный пунктир, лёгкая заливка и подпись над головой. */
-  function stranger(g, W, lw) {
+  function stranger(g, W, H, lw) {
     const s = other;
     const a = s.alpha;
     if (a < 0.01 || !s.ok) return;
@@ -597,6 +618,7 @@ export function createView() {
     const w = g.measureText(STRANGER).width + 24;
     let y = s.cy - s.rh - 12 - h;
     if (y < TOP_SAFE) y = s.cy + s.rh + 12;
+    y = clamp(y, 12, Math.max(12, H - 12 - h)); // лицо у края или за кадром: подпись у края, на экране
     const x = clamp(s.cx - w / 2, 12, Math.max(12, W - 12 - w));
     g.beginPath();
     pill(g, x, y, w, h);
@@ -700,7 +722,11 @@ export function createView() {
 
   function pop(el) {
     if (reduced || !el.animate) return;
-    el.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)', offset: 0.35 }, { transform: 'scale(1)' }], { duration: 560, easing: pal.spring });
+    try {
+      el.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.08)', offset: 0.35 }, { transform: 'scale(1)' }], { duration: 560, easing: pal.spring });
+    } catch {
+      // токен easing браузер не понял: чип просто без толчка
+    }
   }
 
   function sync(v) {
@@ -734,13 +760,13 @@ export function createView() {
     /** Каждый кадр распознавания, пока на экране LIVE (и в отсчёте, и после финиша). */
     draw(frame, d, c) {
       const g = d?.ctx;
-      if (!g || !frame) return;
+      if (!g || !frame || typeof d.project !== 'function') return;
       pal ??= readTokens();
-      const t = frame.t ?? 0;
+      const t = Number.isFinite(frame.t) ? frame.t : lastT;
       const dt = lastT ? clamp(t - lastT, 0, 500) : 33;
       lastT = t;
-      const W = d.w;
-      const H = d.h;
+      const W = Number.isFinite(d.w) ? d.w : 0;
+      const H = Number.isFinite(d.h) ? d.h : 0;
 
       // project() аффинная (cover + зеркало): берём коэффициенты по двум точкам, дальше без объектов
       const p0 = d.project(ZERO);
@@ -749,21 +775,29 @@ export function createView() {
       P.bx = p0.x;
       P.ay = p1.y - p0.y;
       P.by = p0.y;
+      const placed = Number.isFinite(P.ax + P.bx + P.ay + P.by); // проекция без NaN: иначе лиц не рисуем
 
       // Лица: у контроллера уже с подменой из клавиш отладки; старше staleMs не верим
-      const fresh = (r) => r && frame.t - (r.t ?? frame.t) <= VISION.staleMs;
+      const fresh = (r) => r && t - (r.t ?? t) <= VISION.staleMs;
       const res = fresh(c?.faceData) ? c.faceData : fresh(frame.face) ? frame.face : null;
-      const faces = res?.faces ?? [];
+      const faces = placed && Array.isArray(res?.faces) ? res.faces : [];
       const v = c?.view ?? {};
-      const aspect = frame.width && frame.height ? frame.width / frame.height : 16 / 9;
-      let pi = -1;
-      if (faces.length) {
-        const ok = Number.isInteger(v.primary) && v.primary >= 0 && v.primary < faces.length && res === c?.faceData;
-        pi = ok ? v.primary : primaryIndex(faces, me.ok && me.alpha > 0.1 ? me.nose : null, aspect);
+      if (c && c.view !== pairView) {
+        // контроллер посчитал кадр: c.view и c.faceData из одного кадра
+        pairView = c.view;
+        pairData = c.faceData;
       }
-      const oi = faces.length > 1 ? (pi === 0 ? 1 : 0) : -1;
-      if (pi >= 0) feed(me, faces[pi], P, dt);
-      if (oi >= 0) feed(other, faces[oi], P, dt);
+      const aspect = frame.width && frame.height ? frame.width / frame.height : 16 / 9;
+      // primary контроллера верен только для лиц, по которым он посчитан. -1 при лицах в кадре:
+      // медитирующего не видно, рядом чужое лицо (его рисуем вторым человеком, ореол на него не едет).
+      // В отсчёте и после финиша контроллер кадры не считает: главное лицо выбираем сами, ближе к прошлому носу.
+      const trusted = c?.started === true && res != null && res === c.faceData && res === pairData
+        && Number.isInteger(v.primary) && v.primary < faces.length;
+      let pi = trusted ? v.primary : faces.length ? primaryIndex(faces, me.ok && me.alpha > 0.1 ? me.nose : null, aspect) : -1;
+      let oi = -1;
+      for (let i = 0; i < faces.length && oi < 0; i++) if (i !== pi) oi = i;
+      if (pi >= 0 && !feed(me, faces[pi], P, dt)) pi = -1;
+      if (oi >= 0 && !feed(other, faces[oi], P, dt)) oi = -1;
       me.alpha += ((pi >= 0 ? 1 : 0) - me.alpha) * ease(dt, pi >= 0 ? 160 : 280);
       other.alpha += ((oi >= 0 ? 1 : 0) - other.alpha) * ease(dt, 200);
 
@@ -791,7 +825,7 @@ export function createView() {
       if (started && v.closed != null) openTo = v.closed ? 0 : 1;
       else if (pi >= 0) {
         const b = blink(res.blendshapes?.[pi]);
-        openTo = b == null ? 1 : clamp((0.55 - b) / 0.3, 0, 1);
+        openTo = Number.isFinite(b) ? clamp((0.55 - b) / 0.3, 0, 1) : 1;
       }
       lv.open += (openTo - lv.open) * ease(dt, 110);
 
@@ -847,29 +881,32 @@ export function createView() {
 
       const lw = clamp(me.rw * 0.016, 1.6, 3.2);
       const A = me.alpha;
-      g.save();
-      g.lineCap = 'round';
-      g.lineJoin = 'round';
-      vignette(g, W, H, b);
-      if (me.ok) {
-        if (A > 0.01) aura(g, W, H, lv.energy * A, b);
-        ghosts(g, t, A * lv.contour, lw);
-        lostGhost(g, t, lw);
-        if (A > 0.01) {
-          contour(g, A * lv.contour, lw, lv.energy * (5 + 7 * b));
-          trace(g, A * lv.trace, lw);
-          const eyeA = A * (mode === 'idle' ? 0.7 : 0.95);
-          const eyeGlow = (1 - lv.open) * lv.energy * (7 + 5 * b);
-          const lwe = clamp(me.rw * 0.02, 1.8, 3.6);
-          eye(g, 0, eyeA, lwe, eyeGlow);
-          eye(g, 1, eyeA, lwe, eyeGlow);
+      save(g);
+      try {
+        g.lineCap = 'round';
+        g.lineJoin = 'round';
+        vignette(g, W, H, b);
+        if (me.ok) {
+          if (A > 0.01) aura(g, W, H, lv.energy * A, b);
+          ghosts(g, t, A * lv.contour, lw);
+          lostGhost(g, t, lw);
+          if (A > 0.01) {
+            contour(g, A * lv.contour, lw, lv.energy * (5 + 7 * b));
+            trace(g, A * lv.trace, lw);
+            const eyeA = A * (mode === 'idle' ? 0.7 : 0.95);
+            const eyeGlow = (1 - lv.open) * lv.energy * (7 + 5 * b);
+            const lwe = clamp(me.rw * 0.02, 1.8, 3.6);
+            eye(g, 0, eyeA, lwe, eyeGlow);
+            eye(g, 1, eyeA, lwe, eyeGlow);
+          }
         }
+        stranger(g, W, H, clamp(other.rw * 0.016, 1.6, 3.2));
+        rings(g, t, lw);
+      } finally {
+        while (depth > 0) restore(g); // и после исключения холст без клипа и сдвига
       }
-      stranger(g, W, clamp(other.rw * 0.016, 1.6, 3.2));
-      rings(g, t, lw);
-      g.restore();
 
-      if (!dom && typeof document !== 'undefined' && d.canvas?.parentElement) dom = mount(d.canvas.parentElement);
+      if (!dom && !dead && typeof document !== 'undefined' && d.canvas?.parentElement) dom = mount(d.canvas.parentElement);
       if (dom) sync(v);
     },
 
@@ -878,8 +915,9 @@ export function createView() {
       return { mode: st.mode, tone: st.tone, eyes: st.eyes, head: st.head };
     },
 
-    /** Убрать чипы (LIVE закрылся: контроллер вызывает в stop()). */
+    /** Убрать чипы (LIVE закрылся: контроллер вызывает в stop()). Кадры после этого чипы не вернут. */
     destroy() {
+      dead = true;
       dom?.root.remove();
       dom = null;
       ui = {};
