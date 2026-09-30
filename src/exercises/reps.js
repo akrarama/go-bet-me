@@ -197,7 +197,7 @@ export function describeRejected(reasons) {
  */
 export function createRepController({ challenge, bus, feedback, debug }, def) {
   const { cfg } = def;
-  const counter = createCounter({ down: cfg.down, up: cfg.up });
+  const counter = createCounter({ down: cfg.down, up: cfg.up, armMs: cfg.armMs ?? REPS.armMs });
   const holds = createHolds();
   const faults = new Map(); // code → { code, text, count }
   const rejected = []; // { code, text, at, value? }
