@@ -28,6 +28,14 @@ const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).s
 const isOpen = (h) => h.kind === 'round' && (h.status === 'held' || h.status === 'ended');
 
 /**
+ * Что показать бейджем у фишки баланса. Списание и возврат: сколько ушло или пришло.
+ * Расчёт: чистый итог раунда (+9 / −10), как на карточке итогов, а не выплата вместе с вернувшейся ставкой (+19).
+ */
+export function badgeOf({ reason, delta, round }) {
+  return reason === 'settle' && round?.settlement ? round.settlement.player.delta : delta;
+}
+
+/**
  * Кошелёк без DOM.
  * storage: как localStorage (getItem/setItem) или null (только память).
  * subscribe(fn): fn({ reason, delta, balance, round }) на каждое изменение,
@@ -284,10 +292,11 @@ const chip = {
     this.el?.setAttribute('aria-label', `Баланс ${formatCredits(balance)} кр.`);
   },
 
-  to(balance, delta) {
+  /** balance: новое значение; delta: на сколько оно изменилось (число докручивается); badge: что написать в бейдже. */
+  to(balance, delta, badge = delta) {
     if (!this.el) return;
     this.el.setAttribute('aria-label', `Баланс ${formatCredits(balance)} кр.`);
-    if (delta) this.pop(delta);
+    if (badge) this.pop(badge);
     const reduce = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     if (!delta || reduce || document.hidden) return this.jump(balance);
     cancelAnimationFrame(this.raf);
@@ -329,8 +338,9 @@ export const wallet = {
     chip.mount(document.querySelector('#balance'), w.balance);
     ctx.debug.set('баланс', w.balance);
 
-    w.subscribe(({ reason, delta, balance, round }) => {
-      chip.to(balance, delta);
+    w.subscribe((change) => {
+      const { reason, delta, balance, round } = change;
+      chip.to(balance, delta, badgeOf(change));
       ctx.debug.set('баланс', balance);
       if (reason === 'topup') ctx.ui.toast(`Пополнили до ${formatCredits(balance)} кр.`, { icon: '🪙', tone: 'ok' });
       if (reason === 'hold' && round?.requested != null)

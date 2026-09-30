@@ -211,7 +211,7 @@ function moneyTests(t) {
 
 // ─── Кошелёк (src/wallet.js) ─────────────────────────────────────
 
-import { createWallet } from '../src/wallet.js';
+import { createWallet, badgeOf } from '../src/wallet.js';
 
 /** Память вместо localStorage. fail: запись бросает ошибку, как в приватном режиме. */
 function memory({ fail = false } = {}) {
@@ -259,6 +259,32 @@ function walletTests(t) {
     const again = w.settle(ch.id);
     a.eq(w.balance, 109, 'второй вход на экран итогов не платит');
     a.eq(again.round.id, res.round.id);
+  });
+
+  t.test('кошелёк: бейдж у баланса при расчёте показывает чистый итог раунда, как карточка итогов', (a) => {
+    const w = createWallet({ storage: memory() });
+    const changes = [];
+    w.subscribe((c) => changes.push(c));
+    const win = challenge();
+    play(w, win, true);
+    a.deep(changes.map((c) => c.reason), ['hold', 'settle']);
+    a.eq(badgeOf(changes[0]), -10, 'на Старте бейдж «−10»');
+    a.eq(changes[1].delta, 19, 'на счёт выплата вместе со ставкой');
+    a.eq(badgeOf(changes[1]), 9, 'а бейдж чистый итог +9, как на карточке');
+    changes.length = 0;
+    play(w, challenge(), false);
+    a.eq(badgeOf(changes[0]), -10);
+    a.eq(changes[1].delta, 0, 'проиграл: на счёт ничего не пришло');
+    a.eq(badgeOf(changes[1]), -10, 'бейдж показывает −10, как карточка');
+    changes.length = 0;
+    play(w, challenge({ bets: [] }), true);
+    a.eq(badgeOf(changes[1]), 0, 'соло, сделал: чистый итог 0, бейджа нет');
+    changes.length = 0;
+    const cancelled = challenge();
+    w.hold(cancelled);
+    w.refund('camera', cancelled.id);
+    a.eq(badgeOf(changes[1]), 10, 'отмена: вернулась ставка, бейдж +10');
+    a.eq(badgeOf({ reason: 'topup', delta: 5 }), 5);
   });
 
   t.test('кошелёк: ставка больше баланса урезается до баланса, в минус не уходим', (a) => {
