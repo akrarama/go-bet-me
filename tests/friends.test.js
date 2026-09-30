@@ -3,7 +3,7 @@
 // Без DOM, сети и настоящего PeerJS: всё идёт в jsc (sh tools/check.sh).
 
 import { MONEY } from '../src/config.js';
-import { settle, settleFriend, poolLeft } from '../src/money.js';
+import { settle, settleFriend, poolLeft, toCents } from '../src/money.js';
 import { createHostCore } from '../src/friends/host.js';
 import { createGuestCore } from '../src/friends/guest.js';
 import { createGuestWallet } from '../src/friends/guest-wallet.js';
@@ -242,6 +242,12 @@ async function withFakeTimers(fn) {
 }
 
 const LOC = { origin: 'https://demo.test', pathname: '/protiv/' };
+
+// Свои боты для тестов (как MONEY.bots в конфиге на 30.09): от состава ботов в конфиге тесты не зависят
+const TWO_BOTS = [
+  { id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5 },
+  { id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5, female: true },
+];
 
 // ─── Тесты ──────────────────────────────────────────────────────
 
@@ -756,7 +762,9 @@ export default function friendsTests(t) {
 
   t.test('боты: игрок поднял ставку, отказанный бот получает второй шанс', async (a) => {
     const savedToast = ui.toast;
+    const savedBots = MONEY.bots;
     ui.toast = () => {}; // тосты «пул полон» в jsc без страницы
+    MONEY.bots = TWO_BOTS; // свои боты: состав в конфиге меняется, тест от него не зависит
     try {
       await withFakeTimers(async ({ fire, queue }) => {
         const ch = { id: 'cR', type: 'squat', target: 10, stake: 10, bets: [{ id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true }, { id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5, bot: false }] };
@@ -777,6 +785,52 @@ export default function friendsTests(t) {
       });
     } finally {
       ui.toast = savedToast;
+      MONEY.bots = savedBots;
+    }
+  });
+
+  t.test('боты: в конфиге один бот, в пул идёт только он, остаток свободен для друзей, тосты как обычно', async (a) => {
+    const savedToast = ui.toast;
+    const savedBots = MONEY.bots;
+    const toasts = [];
+    ui.toast = (text) => toasts.push(text);
+    MONEY.bots = [TWO_BOTS[1]]; // только Аня
+    try {
+      await withFakeTimers(async ({ fire }) => {
+        const ch = { id: 'c1', type: 'squat', target: 10, stake: 10, bets: [] };
+        bots.join(ch);
+        fire();
+        a.deep(ch.bets.map((b) => `${b.id}:${b.amount}`), ['bot-anya:5'], 'Аня одна, пул наполовину');
+        a.eq(poolLeft(ch), 5, 'место для настоящего друга остаётся');
+        a.eq(toasts.at(-1), 'Аня поставила 5 против тебя');
+        const full = { id: 'c2', type: 'squat', target: 10, stake: 5, bets: [{ id: 'peer:f1', name: 'Лиса', avatar: '🦊', amount: 5, bot: false }] };
+        bots.join(full);
+        fire();
+        a.eq(full.bets.length, 1, 'места нет: бот не ставит');
+        a.eq(toasts.at(-1), 'Аня хотела поставить 5, но пул уже полон');
+        bots.join({ id: 'c3', stake: 10, bets: [{ id: 'bot-anya', name: 'Аня', amount: 5, bot: true }] });
+        a.eq(toasts.length, 2, 'уже поставившая бот второй раз не приходит');
+        MONEY.bots = [];
+        bots.join({ id: 'c4', stake: 10, bets: [] });
+        fire();
+        a.eq(toasts.length, 2, 'ботов нет совсем: ничего не ломается');
+      });
+    } finally {
+      ui.toast = savedToast;
+      MONEY.bots = savedBots;
+    }
+  });
+
+  t.test('расчёт с одним ботом: остаток ставки свободен, деньги сходятся', (a) => {
+    const solo = [TWO_BOTS[1]];
+    for (const success of [true, false]) {
+      const st = settle({ stake: 10, bets: solo, success });
+      a.eq(st.pool, 5);
+      a.eq(st.open, 5);
+      a.eq(st.friends.length, 1);
+      a.eq(toCents(st.player.delta) + toCents(st.friends[0].delta) + toCents(st.creators.delta), 0, `деньги сходятся (${success})`);
+      a.eq(st.player.delta, success ? 4.5 : -10);
+      a.eq(st.creators.uncovered, success ? 0 : 5, 'незакрытые 5 уходят приложению только при провале');
     }
   });
 

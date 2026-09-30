@@ -819,7 +819,9 @@ function formatTests(t) {
 import { MONEY } from '../src/config.js';
 import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive, countVars, poolFor } from '../src/friends/bots.js';
 
-const [DIMA, ANYA] = MONEY.bots;
+// Свои боты для тестов, а не MONEY.bots: состав ботов в конфиге меняется (остался один), тесты от него не зависят.
+const DIMA = { id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5 };
+const ANYA = { id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5, female: true };
 const templates = () => [...Object.values(LINES).flatMap((byType) => Object.values(byType).flat()), ...Object.values(FAULT_LINES).flat()];
 
 function botsTests(t) {
