@@ -16,7 +16,7 @@ import { sound } from '../sound.js';
 import { esc } from '../ui.js';
 import { invite, qrCached, qrFor, shortLink, betRow } from '../ui/invite.js';
 import { gestures, LIVENESS_TEXT } from '../vision/gestures.js';
-import { mss, plural, targetLabel } from './setup.js';
+import { goalChip, plural } from './setup.js';
 
 const HINTS = {
   'hand-rearm': 'Опусти руку и подними снова',
@@ -101,8 +101,7 @@ export default {
   enter(ctx, params = {}) {
     const ch = ctx.app.challenge;
     const def = CHALLENGES[ch.type];
-    const { num, unit } = targetLabel(ch.type, ch.target);
-    const goal = `${num} ${unit}${def.limitSec ? ` за ${mss(def.limitSec)}` : ''}`;
+    const goal = goalChip(ch.type, ch.target); // «10 повторов за 1:30», у удержания «1 минута, лимит 3:00»
     const failed = params.reason === 'liveness';
     const checkSec = GESTURES.livenessSec;
     const holdSec = GESTURES.handUpMs / 1000;
