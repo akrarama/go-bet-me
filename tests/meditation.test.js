@@ -502,4 +502,57 @@ export default (t) => {
     a.eq(c.maxLives, M.lives);
     a.eq(typeof c.stop, 'function');
   });
+
+  // ─── ready: «Встань в позицию» до отсчёта ──────────────────
+
+  t.test('ready: лицо в кадре и в кадре только ты, чистая проверка до старта', (a) => {
+    const seen = { hints: 0, faults: 0, clears: 0 };
+    const c = createController({
+      challenge: { target: 60 },
+      bus: { emit: () => (seen.faults += 1) },
+      feedback: { hint: () => (seen.hints += 1), clear: () => (seen.clears += 1), clearNow: () => (seen.clears += 1), say: () => (seen.hints += 1) },
+      debug: { enabled: false, set() {} },
+    });
+    const at = (faces) => ({ t: T0, ran: 'face', width: W, height: H, face: { t: T0, faces, blendshapes: faces.map(() => OPEN) } });
+    const byId = (r) => Object.fromEntries(r.checks.map((k) => [k.id, k.ok]));
+    a.eq(typeof c.ready, 'function');
+
+    const none = c.ready(at([]));
+    a.eq(none.ok, false);
+    a.deep(byId(none), { face: false, alone: false }, 'никого нет: обе галочки не стоят');
+
+    const one = c.ready(at([face()]));
+    a.eq(one.ok, true);
+    a.deep(one.checks.map((k) => [k.id, k.text]), [['face', 'Лицо в кадре'], ['alone', 'В кадре только ты']]);
+
+    const duo = c.ready(at([face(), face(0.8, 0.5, 0.07)]));
+    a.eq(duo.ok, false);
+    a.deep(byId(duo), { face: true, alone: false }, 'второй человек: лицо есть, но ты не один');
+
+    a.eq(c.ready(at([face(1.02, 0.45)])).ok, false, 'нос за краем кадра: лица в кадре нет');
+    a.eq(c.ready({ t: T0, ran: 'face', width: W, height: H, face: null }).ok, false, 'модель ещё не ответила');
+    a.eq(c.ready(undefined).ok, false);
+    for (const r of [none, one, duo]) for (const k of r.checks) a.ok(k.text.length <= 22, `текст до 22 символов: ${k.text}`);
+
+    // чистая проверка: ни событий, ни подсказок, ни счёта, ни жизней, старт не начат
+    a.deep(seen, { hints: 0, faults: 0, clears: 0 });
+    a.eq(c.count, 0);
+    a.eq(c.lives, M.lives);
+    a.eq(c.started, false);
+  });
+
+  t.test('ready между кадрами ничего не меняет: те же счёт, жизни и нарушения', (a) => {
+    const plain = setup();
+    plain.run(12000, open);
+    const probed = setup();
+    probed.run(12000, () => {
+      const s = open();
+      probed.c.ready({ t: 0, ran: 'face', width: W, height: H, face: { t: 0, faces: s.faces, blendshapes: s.blendshapes } });
+      return s;
+    });
+    a.deep(plain.codes(), ['eyes_open']);
+    a.eq(probed.c.count, plain.c.count);
+    a.eq(probed.c.lives, plain.c.lives);
+    a.deep(probed.codes(), plain.codes());
+  });
 };

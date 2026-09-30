@@ -1,4 +1,5 @@
 // LOBBY: друзья ставят против (P0: боты), пул. Старт: рука над головой 1 с → LIVENESS. 👎 → SETUP.
+// Запасной старт, если рука не ловится: dwell-кнопка «Старт» (палец-курсор, 1 с).
 // Владелец: блок 2 (Жесты). Ставки даёт блок 3: bots.join(challenge) → событие bet.
 // Модели ['gesture', 'pose'] по очереди: палец-курсор и «рука вверх» одновременно.
 // Прогресс удержания руки (gestures.bestArm) видно дважды: большое кольцо старта и кольцо у запястья.
@@ -98,6 +99,8 @@ export default {
           <div class="lobby-start__label" data-label>Подними руку над головой</div>
           <div class="lobby-start__sub">и подержи ${holdSec} ${plural(holdSec, 'секунду', 'секунды', 'секунд')}</div>
           <div class="lobby-back"><span aria-hidden="true">👎</span> Назад к настройкам</div>
+          <button class="btn btn--primary lobby-go" data-dwell data-action="go">Старт</button>
+          <div class="lobby-alt">Рука не ловится? Наведи палец на кнопку</div>
         </section>
       </div>`;
 
@@ -137,7 +140,8 @@ export default {
     });
     bots.join(ch);
 
-    ctx.on('handup', () => {
+    // Старт: рука над головой или запасная dwell-кнопка «Старт» (если рука не ловится)
+    const startNow = () => {
       if (v.going) return;
       v.going = true;
       coach(ctx, v, null);
@@ -147,7 +151,9 @@ export default {
       v.label.textContent = 'Старт!';
       sound.play('go');
       ctx.timeout(() => ctx.app.go('LIVENESS'), GO_DELAY_MS);
-    });
+    };
+    ctx.on('handup', startNow);
+    q('.lobby-go').addEventListener('click', startNow);
     ctx.on('gesture', ({ name }) => {
       if (name === 'Thumb_Down' && !v.going) ctx.app.go('SETUP');
     });

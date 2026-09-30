@@ -14,6 +14,15 @@ export const camera = {
   lost: false,
   frozen: false, // debug: имитация обрыва
 
+  /** Поток для звонка другу (P1): камера как есть, видеофайл отладки через captureStream. null: потока нет. */
+  get stream() {
+    const v = this.video;
+    if (!v) return null;
+    if (v.srcObject instanceof MediaStream) return v.srcObject;
+    if (this.source === 'file' && v.captureStream) return (this.captured ??= v.captureStream());
+    return null;
+  },
+
   async start(video) {
     this.video = video;
     video.muted = true;
