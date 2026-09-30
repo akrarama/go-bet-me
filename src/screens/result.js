@@ -10,13 +10,13 @@
 // Чистые помощники (TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows) идут в тестах в jsc,
 // поэтому DOM только внутри функций. VOID берёт отсюда ledgerRow, amount, balanceLine, ctaButton, armCta, sayLater.
 
-import { CHALLENGES } from '../config.js';
+import { CHALLENGES, MONEY } from '../config.js';
 import { esc, formatTime } from '../ui.js';
 import { settle, formatCredits, formatFee, plural, toCents, fromCents } from '../money.js';
 import { wallet } from '../wallet.js';
 import { bots } from '../friends/bots.js';
 
-const GUARD_MS = 1200; // кнопка и 👍 оживают не сразу: жест, который ещё держат после LIVE, не пролистает итоги
+const GUARD_MS = MONEY.ctaGuardMs; // кнопка и 👍 оживают не сразу: жест после LIVE (или ложный 👍 от кулаков на полу) не пролистает итоги
 const VOICE_MS = 400; // озвучка через столько после входа
 const COUNT_MS = 700; // докрутка чисел
 const COUNT_DELAY_MS = 250; // числа крутятся, когда строки уже появляются
@@ -32,6 +32,7 @@ export const TEXT = {
   clean: 'Без ошибок',
   times: (n, label) => `${n} × ${label}`,
   rejected: (n) => `${n} ${plural(n, 'незасчитанный', 'незасчитанных', 'незасчитанных')}`,
+  streak: (n) => `Лучшая серия: ${n} ${plural(n, 'чистый', 'чистых', 'чистых')} подряд`,
   money: 'Расчёт',
   you: 'Ты',
   app: 'Приложение',
@@ -96,6 +97,13 @@ export function rejectedSummary(rejected) {
   }
   const parts = [...groups.values()].sort((a, b) => b.count - a.count).map((g) => TEXT.times(g.count, g.label));
   return `${TEXT.rejected(list.length)}: ${parts.join(', ')}`;
+}
+
+/** «Лучшая серия: 7 чистых подряд» для приседаний и отжиманий, если серия не короче MONEY.streakMin. Иначе ''. */
+export function streakText(session) {
+  const n = Math.floor(Number(session?.extra?.bestStreak));
+  const reps = session?.type === 'squat' || session?.type === 'pushup';
+  return reps && n >= MONEY.streakMin ? TEXT.streak(n) : '';
 }
 
 /** Строка под заголовком. forced-success / forced-fail (клавиши отладки) как обычный успех / провал. */
@@ -167,12 +175,16 @@ export function balanceLine(to, { from = to, note = '', mood = 'is-zero' } = {})
 }
 
 /**
- * Кнопка «👍 …» для пальца-курсора. Пока armCta её не оживит, она только выглядит приглушённой (is-waiting)
- * и нажатие не срабатывает. Не disabled: иначе dwell не видит палец, который уже лежит на кнопке при входе,
- * и нажимает её сам, как только кнопка оживёт (итоги пролистывались бы через пару секунд).
+ * Кнопка «👍 …» для пальца-курсора. Пока armCta её не оживит (MONEY.ctaGuardMs), она приглушена (is-waiting)
+ * и по кругу вокруг 👍 бежит тонкое кольцо ожидания; нажатие в это время не срабатывает.
+ * Не disabled: иначе dwell не видит палец, который уже лежит на кнопке при входе, и нажимает её сам,
+ * как только кнопка оживёт (итоги пролистывались бы через пару секунд).
  */
 export const ctaButton = (text) =>
-  `<button class="btn btn--primary wait-cta is-waiting" type="button" data-dwell data-cta><span aria-hidden="true">👍</span>${esc(text)}</button>`;
+  `<button class="btn btn--primary wait-cta is-waiting" type="button" data-dwell data-cta style="--guard: ${MONEY.ctaGuardMs}ms">` +
+  '<span class="wait-cta__icon" aria-hidden="true"><span class="wait-cta__thumb">👍</span>' +
+  '<svg class="wait-cta__ring" viewBox="0 0 24 24"><circle class="wait-cta__track" cx="12" cy="12" r="10" pathLength="1"></circle><circle class="wait-cta__fill" cx="12" cy="12" r="10" pathLength="1"></circle></svg></span>' +
+  `${esc(text)}</button>`;
 
 /** Кнопка [data-cta] и жест 👍 ведут дальше (go), но только через GUARD_MS после входа и один раз. */
 export function armCta(ctx, go) {
@@ -239,14 +251,15 @@ function renderEmpty(ctx) {
   armCta(ctx, () => ctx.app.go('IDLE'));
 }
 
-function faultsHtml(faults, rejected) {
+function faultsHtml(faults, rejected, streak = '') {
   const list = faults.length
     ? `<div class="result__label">${esc(TEXT.faults)}</div>
        <ul class="result__faults">${faults
          .map((f, i) => `<li class="result__fault" style="--i: ${i}"><span class="result__fault-count">${esc(f.count)} ×</span> <span>${esc(f.label)}</span></li>`)
          .join('')}</ul>`
     : `<p class="result__clean"><span class="result__clean-icon" aria-hidden="true">✓</span>${esc(TEXT.clean)}</p>`;
-  return `${list}${rejected ? `<p class="result__rejected">${esc(rejected)}</p>` : ''}`;
+  const best = streak ? `<p class="result__streak"><span aria-hidden="true">🔥</span>${esc(streak)}</p>` : '';
+  return `${best}${list}${rejected ? `<p class="result__rejected">${esc(rejected)}</p>` : ''}`;
 }
 
 export default {
@@ -283,7 +296,7 @@ export default {
               <div class="result__stat-value">${esc(formatTime(def.limitSec ? Math.min(s.durationSec, def.limitSec) : s.durationSec))}</div>
             </div>
           </div>
-          <div class="result__section">${faultsHtml(faultItems(s.faults), rejectedSummary(s.rejected))}</div>
+          <div class="result__section">${faultsHtml(faultItems(s.faults), rejectedSummary(s.rejected), streakText(s))}</div>
         </section>
         <section class="result__side">
           <div class="result__label">${esc(TEXT.money)}</div>

@@ -261,6 +261,55 @@ function walletTests(t) {
     a.eq(again.round.id, res.round.id);
   });
 
+  t.test('кошелёк: ставка больше баланса урезается до баланса, в минус не уходим', (a) => {
+    const w = createWallet({ storage: memory(), start: 3 });
+    const ch = challenge({ stake: 10 });
+    const round = w.hold(ch);
+    a.eq(w.balance, 0, 'списали всё, что было');
+    a.eq(round.stake, 3);
+    a.eq(round.requested, 10, 'запомнили, что хотели больше');
+    w.end(finished(ch, true));
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.stake, 3, 'расчёт по урезанной ставке');
+    a.eq(res.settlement.pool, 3, 'из ставок ботов в пул влезло 3');
+    a.eq(res.settlement.friends[1].full, true, 'второму пул полон');
+    a.eq(w.balance, 5.7, '3 назад и 3 × 0,9 сверху');
+    const lose = createWallet({ storage: memory(), start: 3 });
+    const ch2 = challenge({ stake: 10 });
+    lose.hold(ch2);
+    lose.end(finished(ch2, false));
+    lose.settle(ch2.id);
+    a.eq(lose.balance, 0, 'проиграл: 0, а не минус');
+    const sum = res.settlement;
+    a.eq(toCents(sum.player.delta) + sum.friends.reduce((s, f) => s + toCents(f.delta), 0) + toCents(sum.creators.delta), 0, 'деньги сходятся (в сотых)');
+  });
+
+  t.test('кошелёк: на нуле ставка 0, раунд идёт и ничего не ломает', (a) => {
+    const w = createWallet({ storage: memory(), start: 0 });
+    const ch = challenge();
+    const round = w.hold(ch);
+    a.eq(round.stake, 0);
+    a.eq(w.balance, 0);
+    w.end(finished(ch, false));
+    const res = w.settle(ch.id);
+    a.eq(w.balance, 0);
+    a.eq(res.settlement.player.delta, 0);
+    a.ok(res.settlement.friends.every((f) => f.delta === 0 && Number.isFinite(f.delta)));
+    const ok = challenge();
+    w.hold(ok);
+    w.end(finished(ok, true));
+    w.settle(ok.id);
+    a.eq(w.balance, 0);
+  });
+
+  t.test('кошелёк: обычная ставка не урезается', (a) => {
+    const w = createWallet({ storage: memory() });
+    const round = w.hold(challenge({ stake: 10 }));
+    a.eq(round.stake, 10);
+    a.ok(!('requested' in round));
+    a.eq(w.balance, 90);
+  });
+
   t.test('кошелёк: не сделал → ставка потеряна', (a) => {
     const w = createWallet({ storage: memory() });
     const res = play(w, challenge(), false);
@@ -535,10 +584,59 @@ function botsTests(t) {
 
 // ─── Экраны итогов (src/screens/result.js, src/screens/void.js) ──
 
-import { TEXT as RESULT_TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows } from '../src/screens/result.js';
+import { TEXT as RESULT_TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows, ctaButton, armCta, streakText } from '../src/screens/result.js';
 import { TEXT as VOID_TEXT, voidReason, refundRows } from '../src/screens/void.js';
 
 function screensTests(t) {
+  t.test('итоги и отмена: кнопка и 👍 оживают только через MONEY.ctaGuardMs, кольцо ожидания на месте', (a) => {
+    a.ok(MONEY.ctaGuardMs >= 2500, `защита ${MONEY.ctaGuardMs} мс короче 2,5 с`);
+    const html = ctaButton('Ещё раз');
+    a.ok(html.includes('is-waiting'), 'кнопка сначала приглушена');
+    a.ok(html.includes('wait-cta__ring') && html.includes('wait-cta__fill'), 'кольцо ожидания в разметке');
+    a.ok(html.includes(`--guard: ${MONEY.ctaGuardMs}ms`), 'длительность кольца из той же настройки');
+    a.ok(!/\sdisabled[\s>]/.test(html), 'не disabled: dwell должен видеть палец на кнопке');
+    const handlers = {};
+    const timers = [];
+    const classes = new Set(['is-waiting']);
+    const btn = { classList: { remove: (c) => classes.delete(c) }, addEventListener: (ev, fn) => (handlers[ev] = fn) };
+    const ctx = { root: { querySelector: () => btn }, on: (type, fn) => (handlers[type] = fn), timeout: (fn, ms) => timers.push({ fn, ms }) };
+    let went = 0;
+    armCta(ctx, () => (went += 1));
+    a.eq(timers.length, 1);
+    a.eq(timers[0].ms, MONEY.ctaGuardMs);
+    handlers.gesture({ name: 'Thumb_Up' });
+    handlers.click();
+    a.eq(went, 0, 'до конца ожидания ни ложный 👍, ни клик не срабатывают');
+    a.ok(classes.has('is-waiting'));
+    timers[0].fn();
+    a.ok(!classes.has('is-waiting'), 'после ожидания кнопка оживает');
+    handlers.gesture({ name: 'Thumb_Down' });
+    a.eq(went, 0, 'другой жест не считается');
+    handlers.gesture({ name: 'Thumb_Up' });
+    a.eq(went, 1);
+    handlers.gesture({ name: 'Thumb_Up' });
+    handlers.click();
+    a.eq(went, 1, 'сработало один раз');
+  });
+
+  t.test('итоги: «Лучшая серия» только для приседаний и отжиманий и только от 3 чистых', (a) => {
+    const mk = (type, bestStreak) => ({ type, extra: { bestStreak } });
+    a.eq(streakText(mk('squat', 7)), 'Лучшая серия: 7 чистых подряд');
+    a.eq(streakText(mk('pushup', 3)), 'Лучшая серия: 3 чистых подряд');
+    a.eq(streakText(mk('squat', 21)), 'Лучшая серия: 21 чистый подряд');
+    a.eq(streakText(mk('squat', 22)), 'Лучшая серия: 22 чистых подряд');
+    a.eq(streakText(mk('squat', 11)), 'Лучшая серия: 11 чистых подряд');
+    a.eq(streakText(mk('squat', 7.9)), 'Лучшая серия: 7 чистых подряд');
+    a.eq(streakText(mk('squat', 2)), '', 'короткую серию не показываем');
+    a.eq(streakText(mk('squat', 0)), '');
+    a.eq(streakText(mk('meditation', 40)), '', 'медитация: у неё свои секунды, серии повторов нет');
+    a.eq(streakText({ type: 'squat' }), '');
+    a.eq(streakText({ type: 'squat', extra: null }), '');
+    a.eq(streakText({ type: 'squat', extra: { bestStreak: 'много' } }), '');
+    a.eq(streakText(null), '');
+    a.ok(!/[—–]/.test(streakText(mk('squat', 9))), 'без тире');
+  });
+
   t.test('итоги: сводка незасчитанных, как в спеке', (a) => {
     const depth = { code: 'squat_shallow', text: 'Недостаточная глубина: бедро выше колена, присядь ниже' };
     a.eq(rejectedSummary([depth, depth, depth, { code: 'hip_sag', text: 'таз провис' }]), '4 незасчитанных: 3 × недостаточная глубина, 1 × таз провис');

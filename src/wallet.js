@@ -2,7 +2,7 @@
 // Владелец: блок 3 (Деньги). Суммы считает money.js.
 //
 // Путь ставки (раунд):
-//   live:start  hold()    ставка игрока списана, ставки против закрыты (снимок bets)
+//   live:start  hold()    ставка игрока списана (не больше баланса), ставки против закрыты (снимок bets)
 //   live:end    end()     результат запомнен
 //   RESULT      settle()  расчёт применяется один раз, игроку выплата
 //   live:void   refund()  ставка вернулась
@@ -123,7 +123,9 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
     hold(challenge) {
       this.recover('replaced');
       orphan = null;
-      const S = Math.max(0, toCents(challenge.stake));
+      const want = Math.max(0, toCents(challenge.stake));
+      // не больше, чем есть на счёте: вторая вкладка или прыжок клавишей отладки не уводят баланс в минус
+      const S = Math.min(want, Math.max(0, state.cents));
       const round = {
         id: uid('r'),
         kind: 'round',
@@ -131,6 +133,7 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
         type: challenge.type,
         target: challenge.target,
         stake: fromCents(S),
+        ...(S < want ? { requested: fromCents(want) } : {}), // хотел поставить больше, чем было
         bets: (challenge.bets ?? []).map(({ id, name, avatar, amount, bot, female }) => ({ id, name, avatar, amount, bot: !!bot, female: !!female })),
         status: 'held',
         success: null,
@@ -310,10 +313,12 @@ export const wallet = {
     chip.mount(document.querySelector('#balance'), w.balance);
     ctx.debug.set('баланс', w.balance);
 
-    w.subscribe(({ reason, delta, balance }) => {
+    w.subscribe(({ reason, delta, balance, round }) => {
       chip.to(balance, delta);
       ctx.debug.set('баланс', balance);
       if (reason === 'topup') ctx.ui.toast(`Пополнили до ${formatCredits(balance)} кр.`, { icon: '🪙', tone: 'ok' });
+      if (reason === 'hold' && round?.requested != null)
+        ctx.ui.toast(round.stake ? `Не хватало кредитов, ставка уменьшена до ${formatCredits(round.stake)} кр.` : 'Кредитов нет, играем без ставки', { icon: '🪙' });
     });
 
     ctx.bus.on('live:start', ({ challenge }) => w.hold(challenge));
