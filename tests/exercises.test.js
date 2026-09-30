@@ -3,6 +3,7 @@
 
 import * as dips from '../src/exercises/dips.js';
 import * as pullup from '../src/exercises/pullup.js';
+import * as burpee from '../src/exercises/burpee.js';
 
 /** Контроллер с журналом шины и тихим feedback. */
 export function setup(mod, { target = 999, options } = {}) {
@@ -176,7 +177,68 @@ export default (t) => {
     a.eq(s.ctrl.count, 0);
   });
 
+  // ─── Берпи: машина фаз на метриках кадра ───
+  const STAND = { knee: 172, elbow: 170, tilt: 84, handsDown: false, armsUp: false, ankleY: 0.9 };
+  const CROUCH = { knee: 90, elbow: 170, tilt: 30, handsDown: true, armsUp: false, ankleY: 0.9 };
+  const PLANK = { knee: 170, elbow: 170, tilt: 10, handsDown: true, armsUp: false, ankleY: 0.9 };
+  const BENT = { ...PLANK, elbow: 85 };
+  const JUMP = { ...STAND, ankleY: 0.8 };
+  const ARMS_UP = { ...STAND, armsUp: true };
+  const n = (m, k) => Array(k).fill(m); // k кадров по 33 мс
+  const circle = ({ pushups = 1, jump = JUMP, plank = true } = {}) => [
+    ...n(CROUCH, 8),
+    ...(plank ? n(PLANK, 8) : []),
+    ...(plank ? Array.from({ length: pushups }, () => [...n(BENT, 8), ...n(PLANK, 8)]).flat() : []),
+    ...n(CROUCH, 8),
+    ...n(STAND, 3),
+    ...(jump ? n(jump, 6) : []),
+    ...n(STAND, 40), // дольше окна прыжка
+  ];
+  const run = (frames, opts) => {
+    const cyc = burpee.createCycle(undefined, opts);
+    return frames.flatMap((m, i) => cyc.update(m, i * 33.3));
+  };
+  const got = (ev) => ev.filter((e) => e.type === 'rep' || e.type === 'miss').map((e) => (e.type === 'rep' ? 'rep' : e.rule.code));
+
+  t.test('берпи: три полных круга из положения стоя = 3 повтора', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle(), ...circle(), ...circle()])), ['rep', 'rep', 'rep']);
+  });
+
+  t.test('берпи: без отжимания круг не засчитан, подсказка уже при выходе из упора', (a) => {
+    const ev = run([...n(STAND, 15), ...circle({ pushups: 0 })]);
+    a.deep(got(ev), ['burpee_no_pushup']);
+    a.ok(ev.some((e) => e.type === 'warn' && e.rule.code === 'burpee_no_pushup'));
+  });
+
+  t.test('берпи: без прыжка круг не засчитан', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ jump: null })])), ['burpee_no_jump']);
+  });
+
+  t.test('берпи: присел и встал без упора лёжа = «не было упора лёжа»', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ plank: false })])), ['burpee_no_plank']);
+  });
+
+  t.test('берпи: два отжимания в одном круге = один повтор; прыжок с руками вверх тоже прыжок', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ pushups: 2 }), ...circle({ jump: ARMS_UP })])), ['rep', 'rep']);
+  });
+
+  t.test('берпи: пока человек не постоял, круги не считаются (начал из упора)', (a) => {
+    a.deep(got(run([...circle().slice(0, 40)])), []);
+  });
+
   // ─── Настоящие ролики (калибровка порогов) ───
+  t.test('ролик: берпи сбоку без отжимания: строго 0 и 7 × «не было отжимания», без правила отжимания 7 кругов', (a) => {
+    const strict = replay('burpee', burpee);
+    if (!strict) return;
+    a.eq(strict.ctrl.count, 0);
+    a.deep(codes(strict, 'rejected'), Array(7).fill('burpee_no_pushup'));
+    a.eq(strict.ctrl.summary().extra.rejectedText, '7 незасчитанных: 7 × не было отжимания');
+    a.ok(strict.hints.some((h) => /отожмись/.test(h.text)), 'подсказка про отжимание');
+    const loose = replay('burpee', burpee, { options: { requirePushup: false } });
+    a.eq(loose.ctrl.count, 7);
+    a.eq(loose.of('rejected').length, 0);
+  });
+
   t.test('ролик: брусья сбоку: 12 из 12, недожим на спрыгивании в лог', (a) => {
     const s = replay('dips-side', dips);
     if (!s) return;
