@@ -1,4 +1,5 @@
 // IDLE: заставка и «покажи 👍, чтобы начать». 👍 → SETUP.
+// Запасной путь, если 👍 не ловится: dwell-кнопка «Начать» (палец-курсор, 1 с) → SETUP.
 // Владелец: блок 2 (Жесты). Пока 👍 держится, плашка заполняется (gestures.pending).
 // Без звука: браузер разрешает его только после первого касания.
 
@@ -27,10 +28,21 @@ export default {
         <div class="gesture-cta idle-cta">
           <span class="gesture-cta__icon" aria-hidden="true">👍</span><span>Покажи 👍, чтобы начать</span>
         </div>
+        <div class="idle-alt">
+          <p class="idle-alt__text">Не ловится 👍? Наведи палец на кнопку и подержи секунду</p>
+          <button class="btn idle-start" data-dwell data-action="start">Начать</button>
+        </div>
       </div>`;
     cta = ctx.root.querySelector('.idle-cta');
+    let left = false; // 👍 и кнопка сработали почти вместе: SETUP открываем один раз
+    const start = () => {
+      if (left) return;
+      left = true;
+      ctx.app.go('SETUP');
+    };
+    ctx.root.querySelector('.idle-start').addEventListener('click', start);
     ctx.on('gesture', ({ name }) => {
-      if (name === 'Thumb_Up') ctx.app.go('SETUP');
+      if (name === 'Thumb_Up') start();
     });
   },
 

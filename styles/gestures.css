@@ -117,6 +117,14 @@
 .idle-cta.is-holding { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow); transform: scale(1.04); }
 .idle-cta.is-holding .gesture-cta__icon { animation: none; transform: scale(1.2); }
 
+/* запасной путь, если 👍 не ловится: dwell-кнопка «Начать» */
+.idle-alt { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 10px; }
+.idle-alt__text {
+  margin: 0; max-width: 28em; color: var(--muted); font-size: 15px; font-weight: 600; line-height: 1.35; text-wrap: balance;
+  text-shadow: 0 1px 14px color-mix(in srgb, var(--bg) 80%, transparent);
+}
+.idle-start { min-width: 200px; }
+
 /* SETUP: широкая панель, три ряда кнопок, подпись ряда слева */
 
 .setup { width: min(920px, 100%); display: flex; flex-direction: column; gap: 22px; }
@@ -179,6 +187,8 @@
   gap: 24px 40px;
 }
 .lobby-card { display: flex; flex-direction: column; gap: 18px; }
+.screen--lobby { justify-content: flex-start; overflow-y: auto; }
+.screen--lobby > .lobby { margin-block: auto; } /* по центру, когда влезает; иначе от верха с прокруткой */
 
 .lobby-banner {
   display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: var(--r-sm);
@@ -278,7 +288,17 @@
   display: inline-flex; align-items: center; gap: 8px; margin-top: 18px; padding: 8px 14px; border-radius: var(--r-pill);
   background: var(--surface); border: 1px solid var(--line); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
   color: var(--muted); font-size: 14px; font-weight: 700;
+  order: 1; /* «Назад» в самом низу, под запасной кнопкой */
 }
+
+/* запасной старт: dwell-кнопка, если рука над головой не ловится */
+.lobby-go { min-width: 200px; margin-top: 14px; transition: transform 0.25s var(--ease-spring), background 0.2s, border-color 0.2s, box-shadow 0.2s, opacity 0.2s; }
+.lobby-alt {
+  color: var(--muted); font-size: 14px; font-weight: 600; transition: opacity 0.2s;
+  text-shadow: 0 1px 12px color-mix(in srgb, var(--bg) 80%, transparent);
+}
+.lobby-start.is-go .lobby-go,
+.lobby-start.is-go .lobby-alt { opacity: 0; pointer-events: none; }
 
 /* LIVENESS: кольцо-таймер, задание, стрелка на стороне нужной руки */
 
@@ -367,6 +387,7 @@
   .lobby-gauge { width: 168px; }
   .lobby-gauge__icon { font-size: 62px; }
   .lobby-back { margin-top: 10px; }
+  .lobby-go { min-height: 60px; margin-top: 8px; }
 
   .check { gap: 14px; }
   .check-dial { width: 184px; }
@@ -384,7 +405,9 @@
   .lobby-gauge::before { inset: 12px; }
   .lobby-gauge__icon { font-size: 50px; }
   .lobby-start__label { max-width: none; font-size: 22px; }
-  .lobby-back { margin-top: 8px; }
+  .lobby-back { margin-top: 8px; order: 0; }
+  .lobby-go { grid-column: 1 / -1; width: 100%; margin-top: 8px; }
+  .lobby-alt { grid-column: 1 / -1; text-align: center; }
 }
 
 @media (max-width: 640px) {
@@ -407,6 +430,7 @@
   .setup-help { grid-column: 1 / -1; grid-row: 1; font-size: 14px; }
   .setup-back, .setup-next { min-width: 0; min-height: 72px; padding-inline: 12px; }
 
+  .screen--lobby { padding-top: calc(var(--safe-t) + 64px); padding-bottom: calc(var(--safe-b) + 40px); }
   .lobby-card { gap: 14px; padding: 18px 16px; }
   .lobby-gauge { width: 116px; }
   .lobby-gauge__icon { font-size: 44px; }

@@ -7,6 +7,7 @@
 //   REPS.fault.minMs или minFrames кадров подряд (что наступит раньше), и отпускает через releaseMs.
 //   Правило по движению (полуповтор, глубина) срабатывает в точке разворота угла:
 //   угол ушёл от крайней точки на REPS.turnDeg. Темп проверяется в конце повтора.
+// Перед отсчётом LIVE: ready(frame, t) → { ok, checks } проверяет положение теми же условиями (без счёта и подсказок).
 // Подсказка одна, старшая по приоритету: видимость > форма > глубина > темп (очередь в feedback.js).
 // Повтор, во время которого было активно правило формы, не засчитывается: событие
 // rejected {code, text} и запись в summary().rejected. Полуповтор и мелкий присед тоже идут в этот лог.
@@ -192,6 +193,8 @@ export function describeRejected(reasons) {
  *   turn?(ev, cfg) → { rule, value } | null   разворот угла: полуповтор или мало глубины
  *   missDelayMs?           разворот засчитывается ошибкой через столько мс, если поза не сломалась (прыжок)
  *   tempo?(ev, cfg) → { rule, value } | null  конец повтора: темп
+ *   checks?: [{ id, text, test(m, cfg) }]  положение до старта («Встань в позицию»): те же условия, что gate
+ *                          отбрасывает кадр; text до 22 символов; «Всё тело в кадре» (body) добавляет ready сам
  * }
  * Правило: { code, kind, label (коротко, для итогов), hint (текст или (value, cfg) → текст), joints: ключи SIDE }.
  */
@@ -215,7 +218,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   let t0 = null;
   let stopped = false;
   let flash = null; // { t, ok }: вспышка у сустава, повтор засчитан или нет
-  let ready = false; // человек хоть раз встал в верхнюю точку: до этого «не видно» не ошибка, а подготовка
+  let seenTop = false; // человек хоть раз встал в верхнюю точку: до этого «не видно» не ошибка, а подготовка
 
   const jointsOf = (rule) => (last ? (rule.joints ?? []).map((key) => last.idx[key]).filter((i) => i != null) : []);
   const textOf = (rule, value) => (typeof rule.hint === 'function' ? rule.hint(value, cfg) : rule.hint);
@@ -250,7 +253,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   function track(rule, cond, t) {
     const edge = holds.update(rule.code, cond, t);
-    if (edge === 'on' && (rule !== VISIBILITY || ready)) fire(rule);
+    if (edge === 'on' && (rule !== VISIBILITY || seenTop)) fire(rule);
     else if (edge === 'off') feedback?.clear(rule.code);
   }
 
@@ -283,13 +286,21 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     }
   }
 
+  /** Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»). */
+  function look(lm) {
+    const pick = lm ? pickSide(lm, def.sideKeys) : null;
+    const seen = pick != null && visible(lm, def.visible.map((key) => pick.idx[key]), REPS.minVisibility);
+    return { pick, seen };
+  }
+
+  const aspectOf = (frame) => (frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1);
+
   function step(frame, t) {
     k = alphaFor(lastT == null ? Infinity : t - lastT);
     lastT = t;
     const lm = frame.pose?.landmarks ?? null;
-    const aspect = frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1;
-    const pick = lm ? pickSide(lm, def.sideKeys) : null;
-    const seen = pick != null && visible(lm, def.visible.map((key) => pick.idx[key]), REPS.minVisibility);
+    const aspect = aspectOf(frame);
+    const { pick, seen } = look(lm);
     if (!holds.active(VISIBILITY.code)) seenHint = lm ? VISIBILITY.hint : NOBODY_HINT; // текст не мигает, пока висит
     track(VISIBILITY, !seen, t);
     if (!seen) return; // счёт на паузе
@@ -314,7 +325,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     gateFrames = 0;
 
     const events = counter.update(m.angle, t);
-    ready ||= counter.armed;
+    seenTop ||= counter.armed;
     if (events.some((e) => e.type === 'start')) attempt = [];
     for (const rule of def.rules) {
       const on = !rule.when || rule.when(m, cfg, counter);
@@ -372,6 +383,26 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
       present();
       c.done = c.count >= challenge.target;
       if (debug?.enabled) report();
+    },
+
+    /**
+     * «Встань в позицию» до отсчёта (раздел 14.1): те же условия, что в счёте. «Всё тело в кадре»
+     * (иначе счёт на паузе) и def.checks (кадр, который gate отбросил бы). Все ✓ = счёт пойдёт.
+     * Чистая проверка: без событий, подсказок и счёта. Прогревается только сглаживание метрик,
+     * линия пола и выбор «боком / лицом», чтобы первый кадр счёта не начинал с нуля.
+     * Удержание галочек и отсчёт считает LIVE.
+     */
+    ready(frame, t = frame.t) {
+      k = alphaFor(lastT == null ? Infinity : t - lastT);
+      lastT = t;
+      const lm = frame.pose?.landmarks ?? null;
+      const { pick, seen } = look(lm);
+      const m = seen ? def.measure({ lm, idx: pick.idx, aspect: aspectOf(frame), sm, cfg, t }) : null;
+      const checks = [
+        { id: 'body', text: 'Всё тело в кадре', ok: seen },
+        ...(def.checks ?? []).map(({ id, text, test }) => ({ id, text, ok: m != null && Boolean(test(m, cfg)) })),
+      ];
+      return { ok: checks.every((chk) => chk.ok), checks };
     },
 
     stop() {

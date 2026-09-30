@@ -1,6 +1,6 @@
 // Машина состояний: IDLE → SETUP → LOBBY → LIVENESS → LIVE → RESULT (или VOID).
 // Экран: { model, enter(ctx, params), frame(frame, ctx), draw(frame, ctx), exit(ctx) }
-//   model: 'gesture' | 'pose' | 'face' | ['gesture', 'pose'] | (ctx) => одно из этого
+//   model: 'gesture' | 'pose' | 'face' | ['gesture', 'pose'] | null (без моделей) | (ctx) => одно из этого
 //   enter  рисует разметку в ctx.root и подписывается через ctx.on / ctx.timeout / ctx.interval
 //   frame  каждый кадр распознавания (необязательно)
 //   draw   своя отрисовка поверх видео вместо стандартной (необязательно)
@@ -74,7 +74,7 @@ export const app = {
     app.params = params;
     const next = screens.get(name);
     const model = typeof next.model === 'function' ? next.model(ctx) : next.model;
-    ctx.vision.use(model ?? 'gesture');
+    ctx.vision.use(model === undefined ? 'gesture' : model); // null или 'none': без моделей (экран друга)
     document.body.dataset.state = name;
     ctx.root.innerHTML = '';
     ctx.root.className = `screen screen--${name.toLowerCase()}`;
