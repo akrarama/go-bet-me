@@ -17,6 +17,7 @@ import { dwell } from './ui/dwell.js';
 import { wallet } from './wallet.js';
 import { bots } from './friends/bots.js';
 import { installHost } from './friends/peer.js';
+import { requireAccount } from './account.js';
 
 import idle from './screens/idle.js';
 import setup from './screens/setup.js';
@@ -141,6 +142,7 @@ function onFrame(ctx, frame) {
 }
 
 async function boot() {
+  if (!JOIN_ID && await requireAccount()) return;
   const ctx = makeContext();
   app.init(ctx);
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);

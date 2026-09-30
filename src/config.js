@@ -26,6 +26,10 @@ export const DEBUG_TYPE = DEBUG ? param('type') : null;
 /** ?join=<peerId>: страница друга по ссылке (P1), без камеры и моделей. */
 export const JOIN_ID = param('join');
 
+// Публичные настройки Supabase (anon/publishable key). Заполни их после создания проекта.
+export const SUPABASE_URL = 'https://kvroegndkfemzbkeokuz.supabase.co';
+export const SUPABASE_ANON_KEY = 'sb_publishable_91Pw5_X78vJEHmRI8ON8_g_NDxTVdfq';
+
 // ─── Координатор ────────────────────────────────────────────────
 
 export const APP = {
