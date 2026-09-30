@@ -178,7 +178,7 @@ body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0); }
 .timer { transition: color 0.3s; }
 .timer.is-low { color: var(--danger); }
 .hud__counter { position: absolute; left: var(--gutter); bottom: calc(var(--safe-b) + 104px); }
-.hud__label { font-weight: 700; color: var(--muted); margin-bottom: 4px; font-size: 16px; }
+.hud__label { font-weight: 700; color: var(--muted); margin-bottom: clamp(4px, 1.2vw, 16px); font-size: 16px; }
 .counter {
   font-family: var(--font-display); font-weight: 800; font-size: clamp(96px, 15vw, 200px);
   line-height: 0.86; letter-spacing: -0.05em; font-variant-numeric: tabular-nums;
@@ -217,6 +217,46 @@ body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0); }
 .lost__title { font-family: var(--font-display); font-weight: 600; font-size: clamp(24px, 3vw, 36px); }
 .lost__count { font-family: var(--font-display); font-weight: 800; font-size: clamp(80px, 12vw, 140px); color: var(--danger); line-height: 1; }
 .lost__text { color: var(--muted); max-width: 36ch; }
+.lost__count[hidden] { display: none; }
+
+/* «Встань в позицию»: до отсчёта, галочки от контроллера упражнения */
+.position {
+  position: absolute; top: calc(var(--safe-t) + 124px); left: 50%; transform: translateX(-50%);
+  width: min(560px, calc(100vw - 2 * var(--gutter))); padding: 18px 20px 16px; text-align: center;
+  border-radius: var(--r-lg); background: var(--surface-strong); border: 1px solid var(--line);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: var(--shadow);
+  transition: border-color 0.3s; animation: position-in 0.5s var(--ease-spring) both;
+}
+.position[hidden] { display: none; }
+@keyframes position-in { from { opacity: 0; transform: translate(-50%, -12px) scale(0.97); } }
+.position__title { font-family: var(--font-display); font-weight: 700; font-size: clamp(20px, 2.4vw, 28px); letter-spacing: -0.02em; }
+.position__title--ready { display: none; color: var(--accent); }
+.position.is-ready { border-color: rgba(212, 255, 58, 0.5); }
+.position.is-ready .position__title--wait { display: none; }
+.position.is-ready .position__title--ready { display: block; }
+.position__place { margin-top: 6px; color: var(--muted); font-size: 15px; line-height: 1.4; }
+.position__checks { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.check {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px 8px 10px; border-radius: var(--r-pill);
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-weight: 700; font-size: 15px;
+  transition: color 0.25s, background 0.25s, border-color 0.25s;
+}
+.check__mark {
+  position: relative; flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--faint);
+  transition: background 0.25s, border-color 0.25s, transform 0.3s var(--ease-spring);
+}
+.check.is-ok { color: var(--text); background: rgba(61, 220, 132, 0.12); border-color: rgba(61, 220, 132, 0.45); }
+.check.is-ok .check__mark { background: var(--ok); border-color: var(--ok); transform: scale(1.08); }
+.check.is-ok .check__mark::after {
+  content: ''; position: absolute; left: 4.5px; top: 1.5px; width: 4px; height: 8px;
+  border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.position__hold { height: 4px; margin-top: 14px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.position__hold::before {
+  content: ''; display: block; height: 100%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow);
+  transform: scaleX(0); transform-origin: left;
+}
+.position.is-ready .position__hold::before { transform: scaleX(1); transition: transform var(--hold, 1000ms) linear; }
 
 .finale {
   position: absolute; inset: 0; display: grid; place-items: center;
@@ -276,6 +316,9 @@ body:not([data-state="LIVE"]) .feed { display: none; }
   .sound-hint { display: none; }
   .hud__counter { bottom: calc(var(--safe-b) + 140px); }
   .feed { left: var(--gutter); right: var(--gutter); width: auto; top: auto; bottom: calc(var(--safe-b) + 300px); max-height: 24vh; }
+  .position { top: calc(var(--safe-t) + 116px); padding: 14px 14px 12px; }
+  .position__place { font-size: 14px; }
+  .check { font-size: 14px; padding: 7px 12px 7px 9px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
