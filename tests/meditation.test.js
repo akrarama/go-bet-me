@@ -2,7 +2,7 @@
 
 import { MEDITATION as M, MONEY } from '../src/config.js';
 import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW, syntheticFace } from '../src/vision/face.js';
-import { createController } from '../src/exercises/meditation.js';
+import { RULES, createController } from '../src/exercises/meditation.js';
 import friend, {
   REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural, progressText,
   reduce, resultView, timerView, videoView, voidView, lostView,
@@ -196,16 +196,75 @@ export default (t) => {
   t.test('одно и то же нарушение не списывает жизни подряд, пока его не исправили', (a) => {
     const { c, run, log, codes } = setup();
     run(8000);
-    run(20000, open);
-    a.deep(codes(), ['eyes_open'], '12 с с открытыми глазами = одно нарушение');
+    run(16000, open);
+    a.deep(codes(), ['eyes_open'], '6 с с открытыми глазами после нарушения = одно нарушение');
     a.eq(c.lives, 2);
-    run(20500);
-    run(23000, open);
-    a.deep(codes(), ['eyes_open'], 'закрыл на 0.5 с: ещё не исправил');
+    run(16500);
+    run(19000, open);
+    a.deep(codes(), ['eyes_open'], 'закрыл на 0.5 с: ещё не исправил, но и до «ещё минус жизнь» далеко');
     a.ok(log.clears.includes('eyes_open'), 'подсказка уходит, как только закрыл');
-    run(24500);
-    run(26700, open);
-    a.deep(codes(), ['eyes_open', 'eyes_open'], 'закрыл на 1.5 с, открыл снова на 2 с');
+    run(20500);
+    run(22700, open);
+    a.deep(codes(), ['eyes_open', 'eyes_open'], 'закрыл на 1.5 с, открыл снова на 2 с: это уже новое нарушение');
+    a.eq(c.lives, 1);
+  });
+
+  t.test('нарушение висит дольше 12 с: ещё минус жизнь, и так до провала', (a) => {
+    const { c, run, codes } = setup();
+    run(8000);
+    run(21000, empty); // человек ушёл из кадра и не вернулся: первое списание на 10 с
+    a.deep(codes(), ['face_lost']);
+    a.eq(c.lives, 2);
+    run(23000, empty); // 12 с спустя: ещё жизнь
+    a.deep(codes(), ['face_lost', 'face_lost']);
+    a.eq(c.lives, 1);
+    run(35000, empty);
+    a.deep(codes(), ['face_lost', 'face_lost', 'face_lost']);
+    a.eq(c.lives, 0);
+    a.eq(c.failed, false, 'подсказку успевают увидеть');
+    run(37000, empty);
+    a.eq(c.failed, true, 'три жизни: провал, раунд не висит бесконечно');
+    a.deep(c.summary().faults, [{ code: 'face_lost', text: 'лицо вышло из кадра', count: 3 }]);
+  });
+
+  t.test('висящее нарушение: за 6 с подсказка предупреждает «иначе минус жизнь», новая жизнь возвращает обычный текст', (a) => {
+    const { run, log } = setup();
+    const last = () => log.hints.filter((x) => x.code === 'face_lost').pop().text;
+    run(8000);
+    run(15000, empty);
+    a.eq(last(), 'Лицо вышло из кадра, вернись', 'первые 6 с обычный текст');
+    run(17000, empty);
+    a.eq(last(), 'Лицо вышло из кадра: вернись, иначе минус жизнь');
+    run(22600, empty);
+    a.eq(last(), 'Лицо вышло из кадра, вернись', 'жизнь списана: подсказка начинается заново');
+    for (const [code, text] of [['two_faces', 'В кадре второй человек: пусть отойдёт, иначе минус жизнь'], ['eyes_open', 'Глаза открыты: закрой, иначе минус жизнь'], ['head_moving', 'Голова двигается: замри, иначе минус жизнь']]) {
+      a.eq(RULES.find((r) => r.code === code).warnText, text);
+    }
+  });
+
+  t.test('исправил нарушение: «ещё минус жизнь» за старое не приходит, новое считается заново', (a) => {
+    const { c, run, codes } = setup();
+    run(8000);
+    run(14000, empty); // списано на 10 с
+    run(17000); // вернулся на 3 с: исправлено
+    run(21000, empty); // ушёл снова: новое нарушение на 19 с
+    a.deep(codes(), ['face_lost', 'face_lost']);
+    run(25000, empty); // старое «12 с» (22 с) не сработало: оно исправлено
+    a.eq(c.lives, 1);
+    run(33000, empty); // 12 с после нового (19 с): 31 с
+    a.deep(codes(), ['face_lost', 'face_lost', 'face_lost']);
+  });
+
+  t.test('кадров не было: время для «ещё минус жизнь» не идёт', (a) => {
+    const { c, run, frameAt, codes } = setup();
+    run(8000);
+    run(12000, empty); // списано на 10 с
+    frameAt(22000, empty); // вкладка была скрыта 10 с
+    a.deep(codes(), ['face_lost'], 'скрытая вкладка не списывает жизнь');
+    run(31000, empty);
+    a.deep(codes(), ['face_lost'], 'до 12 с от возобновления ещё есть время');
+    run(33000, empty);
+    a.deep(codes(), ['face_lost', 'face_lost']);
     a.eq(c.lives, 1);
   });
 
