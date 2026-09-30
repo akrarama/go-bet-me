@@ -10,6 +10,7 @@ import http.server
 import os
 import re
 from functools import partial
+from urllib.parse import parse_qs, urlparse
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -66,6 +67,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._left -= len(chunk)
         except (BrokenPipeError, ConnectionResetError):
             pass  # браузер оборвал загрузку видео, это нормально
+
+    def do_POST(self):
+        """/__save?path=fixtures/....json: tests/replay.js сохраняет итоги прогона. Только fixtures/*.json."""
+        u = urlparse(self.path)
+        rel = (parse_qs(u.query).get('path') or [''])[0].lstrip('/')
+        if u.path != '/__save' or not rel.startswith('fixtures/') or not rel.endswith('.json') or '..' in rel.split('/'):
+            self.send_error(400, 'only /__save?path=fixtures/*.json')
+            return
+        target = os.path.join(self.directory, rel)
+        body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, 'wb') as f:
+            f.write(body)
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
 
     def log_message(self, *args):
         pass
