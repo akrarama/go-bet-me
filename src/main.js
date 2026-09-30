@@ -16,6 +16,7 @@ import { ui, $ } from './ui.js';
 import { dwell } from './ui/dwell.js';
 import { wallet } from './wallet.js';
 import { bots } from './friends/bots.js';
+import { installHost } from './friends/peer.js';
 
 import idle from './screens/idle.js';
 import setup from './screens/setup.js';
@@ -154,6 +155,7 @@ async function boot() {
   dwell.start(ctx);
   wallet.init(ctx);
   bots.init(ctx);
+  installHost({ bus, app, camera }); // друг по ссылке (P1): Peer создаётся при первом входе в LOBBY
   debugKeys();
 
   ui.loader.hide();
