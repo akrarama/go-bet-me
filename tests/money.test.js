@@ -616,7 +616,7 @@ function walletTests(t) {
 // ─── Боты и лента (src/friends/bots.js) ──────────────────────────
 
 import { MONEY } from '../src/config.js';
-import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive, countVars } from '../src/friends/bots.js';
+import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive, countVars, poolFor } from '../src/friends/bots.js';
 
 const [DIMA, ANYA] = MONEY.bots;
 const templates = () => [...Object.values(LINES).flatMap((byType) => Object.values(byType).flat()), ...Object.values(FAULT_LINES).flat()];
@@ -674,6 +674,32 @@ function botsTests(t) {
       a.ok(fill(tpl, ANYA, lineVars(ANYA, { ...sec, target: 60 })).length <= 45, `длинно: ${tpl}`);
   });
 
+  t.test('боты: у планки свои реплики на каждый случай и общие тоже доступны', (a) => {
+    for (const kind of ['opener', 'milestone', 'jab', 'botWon', 'botLost']) {
+      const own = LINES[kind].plank;
+      a.ok(Array.isArray(own) && own.length >= 2, `${kind}: свои реплики планки`);
+      const pool = poolFor(kind, 'plank');
+      a.ok(pool.length > own.length, `${kind}: плюс общие`);
+      for (const line of own) a.ok(pool.includes(line));
+    }
+    a.ok(!poolFor('opener', 'squat').some((l) => /планк/i.test(l)), 'приседаниям про планку не говорим');
+    a.ok(!poolFor('botWon', 'pushup').some((l) => /планк/i.test(l)));
+    a.ok(FAULT_LINES.floor.length >= 3 && FAULT_LINES.exitPlank.length >= 3);
+  });
+
+  t.test('боты: подколы за ошибки планки: таз, колени на полу, вышел из планки', (a) => {
+    a.eq(faultTheme({ code: 'plank_hip_sag', text: 'Таз провисает, напряги живот, выровняй тело' }, 'plank'), 'hips');
+    a.eq(faultTheme({ code: 'plank_hip_high', text: 'Таз задран вверх, опусти таз в линию с плечами' }, 'plank'), 'hips');
+    a.eq(faultTheme({ code: 'plank_knees', text: 'Колени на полу, оторви их и держи тело прямо' }, 'plank'), 'floor');
+    a.eq(faultTheme({ code: 'knees_floor', text: '' }, 'plank'), 'floor');
+    a.eq(faultTheme({ code: 'plank_lost', text: 'Прими упор лёжа, боком к камере' }, 'plank'), 'exitPlank');
+    a.eq(faultTheme({ code: 'x', text: 'Вышел из планки, вернись' }, 'plank'), 'exitPlank');
+    a.eq(faultTheme({ code: 'x', text: 'Прими упор лёжа, боком к камере' }, 'pushup'), null, 'у отжиманий это общий подкол');
+    a.eq(faultTheme({ code: 'squat_knees', text: 'Колени выходят за носки, сядь глубже назад' }, 'squat'), 'knees', 'приседания не задеты');
+    a.eq(faultTheme({ code: 'squat_shallow', text: 'Недостаточная глубина: бедро выше колена' }, 'squat'), 'depth');
+    a.eq(faultTheme({ code: 'push_low', text: 'Не до конца опускаешься: локоть 115°' }, 'pushup'), 'lower');
+  });
+
   t.test('боты: одна и та же реплика не звучит два раза подряд', (a) => {
     const pool = ['раз', 'два', 'три'];
     const used = [];
@@ -709,7 +735,7 @@ function botsTests(t) {
 
 // ─── Экраны итогов (src/screens/result.js, src/screens/void.js) ──
 
-import { TEXT as RESULT_TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows, ctaButton, armCta, streakText } from '../src/screens/result.js';
+import { TEXT as RESULT_TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows, ctaButton, armCta, streakText, holdText, holdLabel, bestLine } from '../src/screens/result.js';
 import { TEXT as VOID_TEXT, voidReason, refundRows } from '../src/screens/void.js';
 
 function screensTests(t) {
@@ -760,6 +786,27 @@ function screensTests(t) {
     a.eq(streakText({ type: 'squat', extra: { bestStreak: 'много' } }), '');
     a.eq(streakText(null), '');
     a.ok(!/[—–]/.test(streakText(mk('squat', 9))), 'без тире');
+  });
+
+  t.test('итоги планки: «Лучшее удержание: 40 с» из extra.bestHoldSec, только для планки', (a) => {
+    a.eq(holdLabel(40), '40 с');
+    a.eq(holdLabel(59.6), '1 мин', 'округляем до секунд');
+    a.eq(holdLabel(75), '1 мин 15 с');
+    a.eq(holdLabel(120), '2 мин');
+    const mk = (type, bestHoldSec) => ({ type, extra: { bestHoldSec } });
+    a.eq(holdText(mk('plank', 40)), 'Лучшее удержание: 40 с');
+    a.eq(holdText(mk('plank', 40.4)), 'Лучшее удержание: 40 с');
+    a.eq(holdText(mk('plank', 4)), '', 'совсем короткое не показываем');
+    a.eq(holdText(mk('plank', 5)), 'Лучшее удержание: 5 с');
+    a.eq(holdText(mk('squat', 40)), '', 'не планка');
+    a.eq(holdText({ type: 'plank' }), '');
+    a.eq(holdText({ type: 'plank', extra: { bestHoldSec: 'много' } }), '');
+    a.eq(holdText(null), '');
+    a.deep(bestLine({ type: 'plank', extra: { bestHoldSec: 45 } }), { icon: '🧱', text: 'Лучшее удержание: 45 с' });
+    a.deep(bestLine({ type: 'squat', extra: { bestStreak: 7 } }), { icon: '🔥', text: 'Лучшая серия: 7 чистых подряд' });
+    a.eq(bestLine({ type: 'pushup', extra: { bestStreak: 1 } }), null);
+    a.eq(bestLine({ type: 'meditation', extra: { bestStreakSec: 50, bestHoldSec: 50 } }), null);
+    a.ok(!/[—–]/.test(holdText(mk('plank', 75))));
   });
 
   t.test('итоги: сводка незасчитанных, как в спеке', (a) => {

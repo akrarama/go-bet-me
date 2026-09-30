@@ -33,6 +33,7 @@ export const TEXT = {
   times: (n, label) => `${n} × ${label}`,
   rejected: (n) => `${n} ${plural(n, 'незасчитанный', 'незасчитанных', 'незасчитанных')}`,
   streak: (n) => `Лучшая серия: ${n} ${plural(n, 'чистый', 'чистых', 'чистых')} подряд`,
+  hold: (sec) => `Лучшее удержание: ${holdLabel(sec)}`,
   money: 'Расчёт',
   you: 'Ты',
   app: 'Приложение',
@@ -98,6 +99,27 @@ export function rejectedSummary(rejected) {
   }
   const parts = [...groups.values()].sort((a, b) => b.count - a.count).map((g) => TEXT.times(g.count, g.label));
   return `${TEXT.rejected(list.length)}: ${parts.join(', ')}`;
+}
+
+/** 40 → «40 с», 75 → «1 мин 15 с», 120 → «2 мин». */
+export function holdLabel(sec) {
+  const n = Math.round(Number(sec));
+  if (n < 60) return `${n} с`;
+  const m = Math.floor(n / 60);
+  const rest = n % 60;
+  return rest ? `${m} мин ${rest} с` : `${m} мин`;
+}
+
+/** «Лучшее удержание: 40 с» для планки, если удержание не короче MONEY.holdMin секунд. Иначе ''. */
+export function holdText(session) {
+  const sec = Number(session?.extra?.bestHoldSec);
+  return session?.type === 'plank' && Number.isFinite(sec) && Math.round(sec) >= MONEY.holdMin ? TEXT.hold(sec) : '';
+}
+
+/** Что рекомендуют под заголовком итогов: серия повторов или удержание планки. { icon, text } или null. */
+export function bestLine(session) {
+  const text = streakText(session) || holdText(session);
+  return text ? { icon: session.type === 'plank' ? '🧱' : '🔥', text } : null;
 }
 
 /** «Лучшая серия: 7 чистых подряд» для приседаний и отжиманий, если серия не короче MONEY.streakMin. Иначе ''. */
@@ -255,15 +277,15 @@ function renderEmpty(ctx) {
   armCta(ctx, () => ctx.app.go('IDLE'));
 }
 
-function faultsHtml(faults, rejected, streak = '') {
+function faultsHtml(faults, rejected, best = null) {
   const list = faults.length
     ? `<div class="result__label">${esc(TEXT.faults)}</div>
        <ul class="result__faults">${faults
          .map((f, i) => `<li class="result__fault" style="--i: ${i}"><span class="result__fault-count">${esc(f.count)} ×</span> <span>${esc(f.label)}</span></li>`)
          .join('')}</ul>`
     : `<p class="result__clean"><span class="result__clean-icon" aria-hidden="true">✓</span>${esc(TEXT.clean)}</p>`;
-  const best = streak ? `<p class="result__streak"><span aria-hidden="true">🔥</span>${esc(streak)}</p>` : '';
-  return `${best}${list}${rejected ? `<p class="result__rejected">${esc(rejected)}</p>` : ''}`;
+  const line = best ? `<p class="result__streak"><span aria-hidden="true">${best.icon}</span>${esc(best.text)}</p>` : '';
+  return `${line}${list}${rejected ? `<p class="result__rejected">${esc(rejected)}</p>` : ''}`;
 }
 
 export default {
@@ -300,7 +322,7 @@ export default {
               <div class="result__stat-value">${esc(formatTime(def.limitSec ? Math.min(s.durationSec, def.limitSec) : s.durationSec))}</div>
             </div>
           </div>
-          <div class="result__section">${faultsHtml(faultItems(s.faults), rejectedSummary(s.rejected), streakText(s))}</div>
+          <div class="result__section">${faultsHtml(faultItems(s.faults), rejectedSummary(s.rejected), bestLine(s))}</div>
         </section>
         <section class="result__side">
           <div class="result__label">${esc(TEXT.money)}</div>
