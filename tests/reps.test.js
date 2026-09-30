@@ -503,7 +503,7 @@ export default (t) => {
   t.test('приседания: никого в кадре: своя подсказка', (a) => {
     const s = setup(squat);
     s.feed(hold(null, 12));
-    a.eq(s.feedback.current?.text, 'Не вижу тебя, встань в кадр целиком');
+    a.eq(s.feedback.current?.text, 'Не вижу тебя: встань в кадр целиком и проверь свет');
   });
 
 
@@ -840,13 +840,13 @@ export default (t) => {
     a.eq(s.ctrl.count, 1, 'поза вернулась: счёт идёт');
   });
 
-  t.test('поза пропала у края кадра (ушёл): «Не вижу тебя, встань в кадр целиком»', (a) => {
+  t.test('поза пропала у края кадра (ушёл): «Не вижу тебя: встань в кадр целиком и проверь свет»', (a) => {
     const nearBottom = squatPose({ ...STAND, override: { 27: { y: 0.97 }, 28: { y: 0.97 } } });
     for (const [label, pose] of [['ступни у нижнего края', nearBottom], ['у левого края', shiftX(squatPose(STAND), -0.45)], ['у правого края', shiftX(squatPose(STAND), 0.45)]]) {
       const s = setup(squat);
       s.feed(hold(pose, 12));
       s.feed(hold(null, 14));
-      a.eq(s.feedback.current?.text, 'Не вижу тебя, встань в кадр целиком', label);
+      a.eq(s.feedback.current?.text, 'Не вижу тебя: встань в кадр целиком и проверь свет', label);
       a.deep(s.of('fault').map((e) => e.code), ['visibility_nobody'], label);
     }
   });
@@ -1130,7 +1130,7 @@ export default (t) => {
     r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, s.t);
     a.eq(r.hint, 'Плохо видно: добавь света или не стой спиной к окну', 'позу видели посреди кадра и потеряли');
     const nobody = setup(squat);
-    a.eq(nobody.ctrl.ready({ t: 0, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, 0).hint, 'Не вижу тебя, встань в кадр целиком', 'никого и не было');
+    a.eq(nobody.ctrl.ready({ t: 0, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, 0).hint, 'Не вижу тебя: встань в кадр целиком и проверь свет', 'никого и не было');
     const p = setup(pushup);
     r = p.probe(hold(pushupPose({ ...TOP, ...hide(15, 16) }), 2));
     a.eq(r.hint, 'Не видно рук: поставь камеру сбоку');
