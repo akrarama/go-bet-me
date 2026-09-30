@@ -223,7 +223,7 @@ function setup(mod, { target = 10, voice = false } = {}) {
  * Трасса настоящего ролика (fixtures/traces, в git не лежит): кадры → контроллер, 15 fps.
  * Только в jsc (readFile) и только если трасса есть рядом с репо, иначе null.
  */
-function replayTrace(name, mod) {
+function replayTrace(name, mod, prepare = null) {
   let data = null;
   try {
     data = typeof readFile === 'function' ? JSON.parse(readFile(`../fixtures/traces/${name}.json`)) : null;
@@ -232,6 +232,7 @@ function replayTrace(name, mod) {
   }
   if (!data) return null;
   const s = setup(mod, { target: 999 });
+  prepare?.(s);
   const { fps, width, height } = data.input;
   data.frames.forEach((f, i) => {
     const t = 1 + (i * 1000) / fps;
@@ -1319,6 +1320,30 @@ export default (t) => {
     const wide = replayTrace('pushup-horizontal', plank);
     a.ok(wide.ctrl.count > 15 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
     a.eq(wide.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
+  });
+
+  // Ролики удержания собраны из настоящего кадра планки (f00001 pushup-side-short с дрожанием 1.5 px, tools: fixtures/mkvideo.swift),
+  // трассы прогнаны через настоящую модель. Провис и задран получены сдвигом столбцов кадра по гауссиане у таза.
+  t.test('ролик планки: 60 с ровной планки: счёт равен времени, ошибок нет, похвалы на 15, 30 и 45 с', (a) => {
+    let calls;
+    const s = replayTrace('plank-hold-60', plank, (q) => { calls = praiseSpy(q); });
+    if (!s) return;
+    a.near(s.ctrl.count, 59.93, 0.15, 'первый кадр время не прибавляет');
+    a.eq(s.of('fault').length, 0);
+    a.deep(calls.map((c) => c.text), ['Корпус ровный, держи', 'Ровная линия, так держать', 'Дыши ровно, держи планку']);
+    a.eq(s.ctrl.summary().extra.bestHoldSec, 59);
+  });
+
+  t.test('ролик планки: сценарий (16 с ровно, 3 с стоя, 6 с ровно, 4 с провис, 20 с ровно, 3 с задран, 12 с ровно): 53 с и три ошибки', (a) => {
+    let calls;
+    const s = replayTrace('plank-scenario', plank, (q) => { calls = praiseSpy(q); });
+    if (!s) return;
+    a.near(s.ctrl.count, 53.1, 0.4, 'идеал 54 с минус паузы на возврат');
+    a.deep(s.of('fault').map((e) => e.code), ['plank_left', 'hip_sag', 'hip_pike']);
+    const sum = s.ctrl.summary();
+    a.deep(sum.faults.map((f) => [f.code, f.count]), [['plank_left', 1], ['hip_sag', 1], ['hip_pike', 1]]);
+    a.ok(sum.extra.bestHoldSec >= 19 && sum.extra.bestHoldSec <= 20, `лучшее удержание ${sum.extra.bestHoldSec} с`);
+    a.deep(calls.map((c) => c.text), ['Корпус ровный, держи', 'Ровная линия, так держать'], 'похвала на 15 с и на 15 с новой серии');
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───
