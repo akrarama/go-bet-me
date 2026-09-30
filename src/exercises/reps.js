@@ -16,7 +16,7 @@
 // draw() рисует на переданном canvas-контексте и вызывается только в браузере.
 
 import { REPS, VISION } from '../config.js';
-import { pickSide, visible } from '../vision/geometry.js';
+import { pickSide } from '../vision/geometry.js';
 
 /** Приоритет подсказок и причин незасчёта. */
 export const PRIORITY = { visibility: 4, form: 3, depth: 2, tempo: 1 };
@@ -31,6 +31,35 @@ export const VISIBILITY = {
 };
 export const NOBODY_HINT = 'Не вижу тебя, встань в кадр целиком';
 const GATE = 'pose_gate'; // код подсказки «поза не для счёта»
+
+/**
+ * Почему тело не видно: подсказка называет то, чего не видно, а не «что-то не так».
+ * У причины свой код для итогов (лог считает их отдельно); все коды visibility* боты читают как тему «корпус».
+ * dark: ни одна нужная точка не видна уверенно (темно или свет в спину); окно за спиной делает из человека силуэт.
+ */
+export const SEEN_WHY = {
+  nobody: { code: 'visibility_nobody', kind: 'visibility', label: 'никого в кадре', hint: NOBODY_HINT, joints: [] },
+  legs: { code: 'visibility_legs', kind: 'visibility', label: 'не видно ног', hint: 'Не видно ног: отойди дальше или поставь камеру ниже', joints: [] },
+  shoulders: { code: 'visibility_shoulders', kind: 'visibility', label: 'не видно плеч', hint: 'Не видно плеч: отойди или подними камеру', joints: [] },
+  arms: { code: 'visibility_arms', kind: 'visibility', label: 'не видно рук', hint: 'Не видно рук: поставь камеру сбоку', joints: [] },
+  dark: { code: 'visibility_dark', kind: 'visibility', label: 'плохо видно', hint: 'Плохо видно: добавь света или не стой спиной к окну', joints: [] },
+  other: VISIBILITY,
+};
+
+/**
+ * Что мешает видеть тело: ключ SEEN_WHY или null, если нужные суставы стороны idx видны (то же условие, что ставит счёт на паузу).
+ * keys: нужные суставы (SIDE), например ['shoulder', 'hip', 'knee', 'ankle'].
+ */
+export function hiddenReason(lm, idx, keys) {
+  const seen = keys.map((key) => [key, lm[idx[key]]?.visibility ?? 0]);
+  const bad = seen.filter(([, v]) => v < REPS.minVisibility).map(([key]) => key);
+  if (!bad.length) return null;
+  if (Math.max(...seen.map(([, v]) => v)) < REPS.darkMaxVisibility) return 'dark';
+  if (bad.includes('ankle') || bad.includes('knee')) return 'legs';
+  if (bad.includes('shoulder')) return 'shoulders';
+  if (bad.includes('wrist') || bad.includes('elbow')) return 'arms';
+  return 'other';
+}
 
 /**
  * Коэффициент EMA для кадра длиной dt мс: alpha на кадр REPS.frameMs, при другой частоте
@@ -193,8 +222,8 @@ export function describeRejected(reasons) {
  *   turn?(ev, cfg) → { rule, value } | null   разворот угла: полуповтор или мало глубины
  *   missDelayMs?           разворот засчитывается ошибкой через столько мс, если поза не сломалась (прыжок)
  *   tempo?(ev, cfg) → { rule, value } | null  конец повтора: темп
- *   checks?: [{ id, text, test(m, cfg) }]  положение до старта («Встань в позицию»): те же условия, что gate
- *                          отбрасывает кадр; text до 22 символов; «Всё тело в кадре» (body) добавляет ready сам
+ *   checks?: [{ id, text, hint, test(m, cfg) }]  положение до старта («Встань в позицию»): те же условия, что gate
+ *                          отбрасывает кадр; text до 22 символов, hint: что сделать; «Всё тело в кадре» (body) добавляет ready сам
  * }
  * Правило: { code, kind, label (коротко, для итогов), hint (текст или (value, cfg) → текст), joints: ключи SIDE }.
  */
@@ -210,7 +239,9 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   const sm = (key, v) => (smooth[key] = v == null || !Number.isFinite(v) ? null : smooth[key] == null ? v : smooth[key] + k * (v - smooth[key]));
   let attempt = []; // правила формы, сработавшие в текущем повторе, по порядку
   let pending = []; // развороты-ошибки, ждут missDelayMs: { rule, value, reason, t, due }
-  let seenHint = VISIBILITY.hint;
+  let why = 'other'; // причина, по которой тело не видно: ключ SEEN_WHY, по ней текст подсказки
+  let whyNext = null; // новая причина ждёт, пока продержится REPS.fault.minMs (текст не мигает)
+  let whySince = 0;
   let gateHint = null;
   let gateFrames = 0;
   let last = null; // последний кадр с видимым телом: { lm, idx, side, m }
@@ -226,7 +257,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   /** Правило сработало: счёт в итогах и событие fault для ленты друзей. */
   function fire(rule, value) {
-    const hint = rule === VISIBILITY ? seenHint : textOf(rule, value);
+    const hint = textOf(rule, value);
     const joints = jointsOf(rule);
     const f = faults.get(rule.code) ?? { code: rule.code, text: rule.label, count: 0 };
     f.count += 1;
@@ -253,8 +284,34 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   function track(rule, cond, t) {
     const edge = holds.update(rule.code, cond, t);
-    if (edge === 'on' && (rule !== VISIBILITY || seenTop)) fire(rule);
+    if (edge === 'on') fire(rule);
     else if (edge === 'off') feedback?.clear(rule.code);
+  }
+
+  /**
+   * Тело не видно: счёт на паузе, подсказка называет причину (SEEN_WHY). Пока подсказки нет, причина берётся сразу;
+   * пока висит, новая причина заменяет текст, только когда держится minMs, и тогда считается ещё одной ошибкой.
+   * «Не видно» до первой стойки (человек ещё занимает позицию) в ошибки не пишется.
+   */
+  function watchSeen(seen, reason, t) {
+    const hanging = holds.active(VISIBILITY.code);
+    let switched = false;
+    if (reason != null) {
+      if (!hanging || reason === why) {
+        why = reason;
+        whyNext = null;
+      } else if (reason !== whyNext) {
+        whyNext = reason;
+        whySince = t;
+      } else if (t - whySince >= REPS.fault.minMs) {
+        why = reason;
+        whyNext = null;
+        switched = true;
+      }
+    }
+    const edge = holds.update(VISIBILITY.code, !seen, t);
+    if ((edge === 'on' || switched) && seenTop) fire(SEEN_WHY[why]);
+    else if (edge === 'off') feedback?.clear(VISIBILITY.code);
   }
 
   /** Полуповтор или мелкий присед: ошибка, если за missDelayMs поза не сломалась (не было прыжка). */
@@ -286,11 +343,14 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     }
   }
 
-  /** Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»). */
+  /**
+   * Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»).
+   * reason: null, если видно, иначе ключ SEEN_WHY (нет позы вообще: nobody).
+   */
   function look(lm) {
     const pick = lm ? pickSide(lm, def.sideKeys) : null;
-    const seen = pick != null && visible(lm, def.visible.map((key) => pick.idx[key]), REPS.minVisibility);
-    return { pick, seen };
+    const reason = pick ? hiddenReason(lm, pick.idx, def.visible) : 'nobody';
+    return { pick, seen: reason == null, reason };
   }
 
   const aspectOf = (frame) => (frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1);
@@ -300,9 +360,8 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     lastT = t;
     const lm = frame.pose?.landmarks ?? null;
     const aspect = aspectOf(frame);
-    const { pick, seen } = look(lm);
-    if (!holds.active(VISIBILITY.code)) seenHint = lm ? VISIBILITY.hint : NOBODY_HINT; // текст не мигает, пока висит
-    track(VISIBILITY, !seen, t);
+    const { pick, seen, reason } = look(lm);
+    watchSeen(seen, reason, t);
     if (!seen) return; // счёт на паузе
 
     const m = def.measure({ lm, idx: pick.idx, aspect, sm, cfg, t });
@@ -339,7 +398,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   /** Подсказка по кадру: старшая из активных правил (разовые разводит feedback по приоритету). */
   function present() {
     if (holds.active(VISIBILITY.code)) {
-      feedback?.hint(seenHint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
+      feedback?.hint(SEEN_WHY[why].hint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
       return;
     }
     if (holds.active(GATE) && gateHint) {
@@ -358,6 +417,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     debug.set('угол', counter.angle == null ? '·' : `${Math.round(counter.angle)}° ${state}`);
     debug.set('сторона', last?.side ?? '·');
     debug.set('поза', gateFrames ? `не для счёта: ${gateHint?.hint}` : 'ок');
+    debug.set('видимость', holds.active(VISIBILITY.code) ? SEEN_WHY[why].label : 'ок');
     debug.set('метрики', Object.entries(m).filter(([key]) => key !== 'angle').map(([key, v]) => `${key} ${num(v)}`).join(', '));
     debug.set('повтор', attempt.length ? `ошибка: ${attempt.map((r) => r.code).join(', ')}` : 'чисто');
   }
@@ -391,18 +451,23 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
      * Чистая проверка: без событий, подсказок и счёта. Прогревается только сглаживание метрик,
      * линия пола и выбор «боком / лицом», чтобы первый кадр счёта не начинал с нуля.
      * Удержание галочек и отсчёт считает LIVE.
+     * У непройденной галочки есть hint: что сделать («Не видно ног: отойди дальше или поставь камеру ниже»);
+     * верхний hint = подсказка первой непройденной галочки, null, если все ✓.
      */
     ready(frame, t = frame.t) {
       k = alphaFor(lastT == null ? Infinity : t - lastT);
       lastT = t;
       const lm = frame.pose?.landmarks ?? null;
-      const { pick, seen } = look(lm);
+      const { pick, seen, reason } = look(lm);
       const m = seen ? def.measure({ lm, idx: pick.idx, aspect: aspectOf(frame), sm, cfg, t }) : null;
       const checks = [
-        { id: 'body', text: 'Всё тело в кадре', ok: seen },
-        ...(def.checks ?? []).map(({ id, text, test }) => ({ id, text, ok: m != null && Boolean(test(m, cfg)) })),
+        { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: SEEN_WHY[reason].hint }) },
+        ...(def.checks ?? []).map(({ id, text, hint, test }) => {
+          const ok = m != null && Boolean(test(m, cfg));
+          return m != null && !ok && hint ? { id, text, ok, hint } : { id, text, ok };
+        }),
       ];
-      return { ok: checks.every((chk) => chk.ok), checks };
+      return { ok: checks.every((chk) => chk.ok), checks, hint: checks.find((chk) => !chk.ok)?.hint ?? null };
     },
 
     stop() {

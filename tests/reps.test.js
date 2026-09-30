@@ -428,18 +428,76 @@ export default (t) => {
     a.eq(s.of('fault').find((e) => e.code === 'squat_half_up').text, 'Встань до конца, выпрями колени');
   });
 
-  t.test('приседания: не видно колено: счёт на паузе и подсказка про кадр', (a) => {
+  t.test('приседания: плохо видно везде (темно): счёт на паузе и подсказка про свет', (a) => {
     const s = setup(squat);
     const hidden = (p) => squatPose({ ...p, vis: 0.3, farVis: 0.2 });
     s.feed(hold(squatPose(STAND), 10));
     s.feed(rep(hidden, STAND, DEEP));
     s.feed(hold(hidden(STAND), 10));
     a.eq(s.ctrl.count, 0);
-    a.eq(s.feedback.current?.text, 'Не весь корпус в кадре, отойди');
+    a.eq(s.feedback.current?.text, 'Плохо видно: добавь света или не стой спиной к окну');
     a.eq(s.feedback.current?.priority, PRIORITY.visibility);
     s.feed(hold(squatPose(STAND), 20));
     s.feed(rep(squatPose, STAND, DEEP));
     a.eq(s.ctrl.count, 1, 'после возвращения в кадр счёт идёт');
+  });
+
+  // Видимость: подсказка называет то, чего не видно (у каждой причины свой код и своя строка в итогах)
+  const hide = (...idx) => ({ override: Object.fromEntries(idx.map((i) => [i, { visibility: 0.2 }])) });
+  const VISIBILITY_CASES = [
+    ['squat', 'ноги: щиколотки', hide(27, 28), 'Не видно ног: отойди дальше или поставь камеру ниже', 'visibility_legs', 'не видно ног'],
+    ['squat', 'ноги: колени и щиколотки', hide(25, 26, 27, 28), 'Не видно ног: отойди дальше или поставь камеру ниже', 'visibility_legs', 'не видно ног'],
+    ['squat', 'плечи', hide(11, 12), 'Не видно плеч: отойди или подними камеру', 'visibility_shoulders', 'не видно плеч'],
+    ['squat', 'темно: везде низкая уверенность', { vis: 0.45, farVis: 0.3 }, 'Плохо видно: добавь света или не стой спиной к окну', 'visibility_dark', 'плохо видно'],
+    ['squat', 'остальное: таз', hide(23, 24), 'Не весь корпус в кадре, отойди', 'visibility', 'не весь корпус в кадре'],
+    ['squat', 'и ноги, и плечи (вплотную к камере): сначала ноги', hide(11, 12, 27, 28), 'Не видно ног: отойди дальше или поставь камеру ниже', 'visibility_legs', 'не видно ног'],
+    ['pushup', 'руки: запястья', hide(15, 16), 'Не видно рук: поставь камеру сбоку', 'visibility_arms', 'не видно рук'],
+    ['pushup', 'руки: локти', hide(13, 14), 'Не видно рук: поставь камеру сбоку', 'visibility_arms', 'не видно рук'],
+    ['pushup', 'ноги: щиколотки и колени', hide(25, 26, 27, 28), 'Не видно ног: отойди дальше или поставь камеру ниже', 'visibility_legs', 'не видно ног'],
+    ['pushup', 'и ноги, и руки: сначала ноги', hide(15, 16, 27, 28), 'Не видно ног: отойди дальше или поставь камеру ниже', 'visibility_legs', 'не видно ног'],
+    ['pushup', 'темно: везде низкая уверенность', { vis: 0.4, farVis: 0.3 }, 'Плохо видно: добавь света или не стой спиной к окну', 'visibility_dark', 'плохо видно'],
+  ];
+  t.test('видимость: подсказка называет то, чего не видно (ноги, плечи, руки, темно, остальное)', (a) => {
+    for (const [type, label, opts, text, code, short] of VISIBILITY_CASES) {
+      const pose = type === 'squat' ? (o) => squatPose({ ...STAND, ...o }) : (o) => pushupPose({ ...TOP, ...o });
+      const s = setup(type === 'squat' ? squat : pushup);
+      s.feed(hold(pose({}), 12)); // сначала встал в позу: «не видно» дальше считается ошибкой
+      s.feed(hold(pose(opts), 14));
+      const name = `${type}, ${label}`;
+      a.eq(s.feedback.current?.text, text, name);
+      a.eq(s.feedback.current?.code, 'visibility', `${name}: код подсказки`);
+      a.eq(s.feedback.current?.priority, PRIORITY.visibility, name);
+      const f = s.of('fault').filter((e) => e.code.startsWith('visibility'));
+      a.deep(f.map((e) => [e.code, e.text, e.label]), [[code, text, short === 'не весь корпус в кадре' ? 'не весь корпус в кадре' : short]], name);
+      a.deep(s.ctrl.summary().faults, [{ code, text: short, count: 1 }], `${name}: строка в итогах`);
+      a.eq(s.ctrl.count, 0, `${name}: счёт на паузе`);
+    }
+  });
+
+  t.test('видимость: причина меняется, только когда держится 0.4 с, и считается ещё одной ошибкой', (a) => {
+    const s = setup(squat);
+    const legs = squatPose({ ...STAND, ...hide(27, 28) });
+    const shoulders = squatPose({ ...STAND, ...hide(11, 12) });
+    s.feed(hold(squatPose(STAND), 12));
+    s.feed(hold(legs, 14));
+    a.eq(s.feedback.current?.text, 'Не видно ног: отойди дальше или поставь камеру ниже');
+    s.feed(hold(shoulders, 6)); // 0.2 с: подсказка не мигает
+    a.eq(s.feedback.current?.text, 'Не видно ног: отойди дальше или поставь камеру ниже');
+    s.feed(hold(shoulders, 10)); // 0.53 с: причина сменилась
+    a.eq(s.feedback.current?.text, 'Не видно плеч: отойди или подними камеру');
+    a.deep(s.ctrl.summary().faults.map((f) => f.code).sort(), ['visibility_legs', 'visibility_shoulders']);
+    // вернулся в кадр и снова пропал: причина берётся сразу, без ожидания
+    s.feed(hold(squatPose(STAND), 20));
+    s.feed(hold(legs, 14));
+    a.eq(s.feedback.current?.text, 'Не видно ног: отойди дальше или поставь камеру ниже');
+  });
+
+  t.test('видимость до первой стойки не считается ошибкой, но подсказка есть', (a) => {
+    const s = setup(squat);
+    s.feed(hold(squatPose({ ...STAND, ...hide(27, 28) }), 14)); // человек ещё занимает позицию
+    a.eq(s.feedback.current?.text, 'Не видно ног: отойди дальше или поставь камеру ниже');
+    a.eq(s.of('fault').length, 0);
+    a.deep(s.ctrl.summary().faults, []);
   });
 
   t.test('приседания: никого в кадре: своя подсказка', (a) => {
@@ -861,6 +919,27 @@ export default (t) => {
     a.eq(cold.ctrl.count, 2, 'контроль: без ready два повтора засчитаны, провисший нет');
     a.eq(warm.ctrl.count, cold.ctrl.count);
     a.deep(warm.of('rejected').map((e) => e.code), cold.of('rejected').map((e) => e.code));
+  });
+
+  t.test('ready: у непройденной галочки есть подсказка, что сделать, у пройденных нет', (a) => {
+    const s = setup(squat);
+    let r = s.probe(hold(squatPose(STAND), 3));
+    a.eq(r.hint, null);
+    a.ok(r.checks.every((c) => c.hint === undefined), 'у пройденных подсказки нет');
+    r = s.probe(hold(squatPose({ ...STAND, ...hide(27, 28) }), 2));
+    a.eq(r.checks[0].hint, 'Не видно ног: отойди дальше или поставь камеру ниже');
+    a.eq(r.hint, 'Не видно ног: отойди дальше или поставь камеру ниже');
+    a.ok(r.checks.slice(1).every((c) => c.hint === undefined), 'про «боком» молчим, пока тела не видно');
+    r = s.probe(hold(squatPose(FACING), 6));
+    a.deep(r.checks.map((c) => [c.id, c.ok, c.hint ?? null]), [['body', true, null], ['side', false, 'Повернись боком к камере, так видно колени и спину'], ['stand', true, null]]);
+    a.eq(r.hint, 'Повернись боком к камере, так видно колени и спину');
+    r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, s.t);
+    a.eq(r.hint, 'Не вижу тебя, встань в кадр целиком');
+    const p = setup(pushup);
+    r = p.probe(hold(pushupPose({ ...TOP, ...hide(15, 16) }), 2));
+    a.eq(r.hint, 'Не видно рук: поставь камеру сбоку');
+    r = p.probe(hold(squatPose(STAND), 3));
+    a.eq(r.hint, 'Прими упор лёжа, боком к камере');
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───

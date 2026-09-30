@@ -251,6 +251,8 @@ body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0); }
   content: ''; position: absolute; left: 4.5px; top: 1.5px; width: 4px; height: 8px;
   border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
+.position__hint { margin-top: 10px; color: var(--warn); font-weight: 700; font-size: 15px; line-height: 1.35; }
+.position__hint:empty { display: none; }
 .position__hold { height: 4px; margin-top: 14px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .position__hold::before {
   content: ''; display: block; height: 100%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow);
