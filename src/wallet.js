@@ -276,7 +276,7 @@ const chip = {
     const t0 = performance.now();
     const ms = 900;
     const step = (t) => {
-      const k = Math.min(1, (t - t0) / ms);
+      const k = Math.min(1, Math.max(0, (t - t0) / ms)); // метка кадра бывает раньше t0
       const e = 1 - (1 - k) ** 3;
       this.shown = k < 1 ? from + (balance - from) * e : balance;
       this.value.textContent = formatCredits(this.shown);
