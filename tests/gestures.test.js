@@ -2,7 +2,8 @@
 // Синтетические последовательности кадров, время в мс (шаг 50 мс ≈ 20 кадров/с, целые числа без округлений).
 
 import { GESTURES } from '../src/config.js';
-import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT } from '../src/vision/gestures.js';
+import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT, createCursorGate, gestures } from '../src/vision/gestures.js';
+import { targetLabel, plural, mss } from '../src/screens/setup.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 import { createFeedback } from '../src/feedback.js';
 import { VERDICT_HINT } from '../src/screens/liveness.js';
@@ -1032,5 +1033,112 @@ export default (t) => {
   t.test('QR: вне браузера loadQr отвечает null и не падает', async (a) => {
     if (typeof window !== 'undefined') return; // в браузере библиотека грузится с CDN по-настоящему
     a.eq(await loadQr(), null);
+  });
+
+  // ─── SETUP: подписи целей и курсор при жестах-командах ──────────────
+
+  t.test('SETUP: цели медитации словами, с минуты это минуты', (a) => {
+    a.deep(targetLabel('meditation', 60), { num: '1', unit: 'минута' });
+    a.deep(targetLabel('meditation', 120), { num: '2', unit: 'минуты' });
+    a.deep(targetLabel('meditation', 300), { num: '5', unit: 'минут' });
+    a.deep(targetLabel('meditation', 600), { num: '10', unit: 'минут' });
+    a.deep(targetLabel('meditation', 1800), { num: '30', unit: 'минут' });
+    a.deep(targetLabel('meditation', 90), { num: '90', unit: 'секунд' }, 'не целая минута остаётся секундами');
+    a.deep(targetLabel('meditation', 45), { num: '45', unit: 'секунд' });
+  });
+
+  t.test('SETUP: цели повторов, склонение и время', (a) => {
+    a.deep(targetLabel('squat', 10), { num: '10', unit: 'повторов' });
+    a.deep(targetLabel('pushup', 21), { num: '21', unit: 'повтор' });
+    a.deep(targetLabel('pushup', 22), { num: '22', unit: 'повтора' });
+    a.eq(plural(11, 'а', 'б', 'в'), 'в');
+    a.eq(plural(1, 'а', 'б', 'в'), 'а');
+    a.eq(mss(90), '1:30');
+    a.eq(mss(120), '2:00');
+  });
+
+  /** Гоняет гейт курсора: жест name со score с from до to (не включая). → массив [t, гасить?]. */
+  const feedCursor = (cg, name, from, to, score = 0.9) => {
+    const out = [];
+    for (let t = from; t < to; t += STEP) out.push([t, cg.update(name, score, t)]);
+    return out;
+  };
+
+  t.test('курсор: 🖐 👍 👎 гасят курсор только после 250 мс подряд, палец, кулак и «не распознан» не гасят', (a) => {
+    for (const name of G.cursorOff) {
+      const cg = createCursorGate();
+      const out = feedCursor(cg, name, 0, 1000);
+      a.ok(out.filter(([t]) => t < G.cursorOffMs).every(([, off]) => !off), name + ': до 250 мс курсор есть');
+      a.ok(out.filter(([t]) => t >= G.cursorOffMs).every(([, off]) => off), name + ': с 250 мс курсора нет');
+    }
+    for (const name of ['Pointing_Up', 'Closed_Fist', 'Victory', 'ILoveYou', 'None']) {
+      const cg = createCursorGate();
+      a.ok(feedCursor(cg, name, 0, 1000).every(([, off]) => !off), name);
+    }
+  });
+
+  t.test('курсор: неуверенная ладонь (ниже 0.7) курсор не отнимает, как бы долго ни держалась', (a) => {
+    const cg = createCursorGate();
+    a.ok(feedCursor(cg, 'Open_Palm', 0, 3000, G.cursorOffMinScore - 0.05).every(([, off]) => !off));
+    const sure = createCursorGate();
+    a.ok(feedCursor(sure, 'Open_Palm', 0, 3000, G.cursorOffMinScore).slice(-1)[0][1], 'ровно на пороге уже гасит');
+  });
+
+  t.test('курсор: жест пропал, сменился или уверенность просела: курсор возвращается на том же кадре', (a) => {
+    const cg = createCursorGate();
+    feedCursor(cg, 'Open_Palm', 0, 1000);
+    a.eq(cg.update('Open_Palm', 0.9, 1000), true);
+    a.eq(cg.update('Pointing_Up', 0.9, 1050), false, 'указал пальцем');
+    feedCursor(cg, 'Open_Palm', 1100, 2000);
+    a.eq(cg.update('None', 0, 2000), false, 'руки нет');
+    feedCursor(cg, 'Open_Palm', 2050, 3000);
+    a.eq(cg.update('Open_Palm', 0.5, 3000), false, 'уверенность просела');
+    // после возврата снова нужно 250 мс, а не мгновенно
+    a.eq(cg.update('Open_Palm', 0.9, 3050), false);
+    a.eq(cg.update('Open_Palm', 0.9, 3050 + G.cursorOffMs - STEP), false);
+    a.eq(cg.update('Open_Palm', 0.9, 3050 + G.cursorOffMs), true);
+  });
+
+  t.test('курсор: смена жеста-команды (🖐 → 👍) начинает отсчёт заново', (a) => {
+    const cg = createCursorGate();
+    feedCursor(cg, 'Open_Palm', 0, 1000);
+    a.eq(cg.update('Thumb_Up', 0.9, 1000), false);
+    a.eq(cg.update('Thumb_Up', 0.9, 1000 + G.cursorOffMs), true);
+  });
+
+  t.test('курсор: события шины при показе пальца, ладони и 👍 (весь путь onFrame → cursor)', (a) => {
+    const events = [];
+    let onFrame = null;
+    const fakeBus = { on: () => () => {}, emit: (type, p) => type === 'cursor' && events.push(p) };
+    gestures.start({
+      bus: fakeBus,
+      draw: { project: (p) => ({ x: p.x * 1000, y: p.y * 1000 }) },
+      debug: { key() {}, set() {}, enabled: false },
+      vision: { onFrame: (fn) => (onFrame = fn) },
+    });
+    const tip = { x: 0.5, y: 0.4, z: 0 };
+    const hand = (gesture, score = 0.9) => ({ gesture, score, landmarks: Array.from({ length: 21 }, () => tip) });
+    const frame = (t, h) => onFrame({ t, ran: 'gesture', gesture: { t, hands: [h] }, pose: null });
+    const last = () => events[events.length - 1];
+    let t = 0;
+    for (; t < 500; t += STEP) frame(t, hand('Pointing_Up'));
+    a.eq(last().visible, true, 'палец: курсор есть');
+    a.deep([last().x, last().y], [500, 400]);
+    // раскрытая ладонь: первые 250 мс курсор ещё есть (могла быть ошибка распознавания), потом гаснет
+    const palm0 = t;
+    for (; t < palm0 + G.cursorOffMs; t += STEP) frame(t, hand('Open_Palm'));
+    a.eq(last().visible, true, 'ладони меньше 250 мс: курсор не отнят');
+    for (; t < 1500; t += STEP) frame(t, hand('Open_Palm'));
+    a.eq(last().visible, false, 'ладонь держится: курсора нет');
+    // палец вернулся: курсор на первом же кадре
+    frame(t, hand('Pointing_Up')); t += STEP;
+    a.eq(last().visible, true, 'палец: курсор вернулся сразу');
+    for (; t < 3000; t += STEP) frame(t, hand('Thumb_Up'));
+    a.eq(last().visible, false, 'удержанный 👍: курсора нет');
+    frame(t, hand('Closed_Fist')); t += STEP;
+    a.eq(last().visible, true, 'кулак без распознанной команды: курсор как раньше');
+    // неуверенная ладонь курсор не отнимает
+    for (; t < 5000; t += STEP) frame(t, hand('Open_Palm', 0.65));
+    a.eq(last().visible, true, 'ладонь с уверенностью 0.65: курсор есть');
   });
 };
