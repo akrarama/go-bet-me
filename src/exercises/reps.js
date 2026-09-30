@@ -7,6 +7,7 @@
 //   REPS.fault.minMs или minFrames кадров подряд (что наступит раньше), и отпускает через releaseMs.
 //   Правило по движению (полуповтор, глубина) срабатывает в точке разворота угла:
 //   угол ушёл от крайней точки на REPS.turnDeg. Темп проверяется в конце повтора.
+// Серия чистых повторов подряд (REPS.praise): короткая похвала уровня ok, не чаще раза в 8 с и никогда поверх ошибки.
 // Перед отсчётом LIVE: ready(frame, t) → { ok, checks } проверяет положение теми же условиями (без счёта и подсказок).
 // Подсказка одна, старшая по приоритету: видимость > форма > глубина > темп (очередь в feedback.js).
 // Повтор, во время которого было активно правило формы, не засчитывается: событие
@@ -30,6 +31,9 @@ export const VISIBILITY = {
   joints: [],
 };
 export const NOBODY_HINT = 'Не вижу тебя, встань в кадр целиком';
+
+/** Похвала за серию чистых повторов (level ok, без звука). Свои варианты упражнения кладут в def.praise. */
+export const PRAISE = ['Отлично, темп ровный', 'Чистый повтор, так держать', 'Красиво, техника чистая'];
 const GATE = 'pose_gate'; // код подсказки «поза не для счёта»
 
 /**
@@ -250,6 +254,10 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   let stopped = false;
   let flash = null; // { t, ok }: вспышка у сустава, повтор засчитан или нет
   let seenTop = false; // человек хоть раз встал в верхнюю точку: до этого «не видно» не ошибка, а подготовка
+  let streak = 0; // чистых повторов подряд: без ошибки формы, глубины и темпа
+  let bestStreak = 0;
+  let lastPraiseAt = -Infinity;
+  let praiseN = 0; // сколько раз хвалили: по кругу берём разные фразы
 
   const jointsOf = (rule) => (last ? (rule.joints ?? []).map((key) => last.idx[key]).filter((i) => i != null) : []);
   const textOf = (rule, value) => (typeof rule.hint === 'function' ? rule.hint(value, cfg) : rule.hint);
@@ -257,6 +265,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   /** Правило сработало: счёт в итогах и событие fault для ленты друзей. */
   function fire(rule, value) {
+    if (rule.kind !== 'visibility') streak = 0; // ошибка техники обрывает серию (не видно в кадре её не рвёт)
     const hint = textOf(rule, value);
     const joints = jointsOf(rule);
     const f = faults.get(rule.code) ?? { code: rule.code, text: rule.label, count: 0 };
@@ -278,6 +287,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     const r = { code: rule.code, text: rule.label, at: Math.round((t - (t0 ?? t)) / 100) / 10 };
     if (value != null) r.value = Math.round(value);
     rejected.push(r);
+    streak = 0;
     flash = { t, ok: false };
     bus?.emit('rejected', { ...r });
   }
@@ -324,9 +334,27 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     }
   }
 
+  /**
+   * Чистый повтор подряд: серия растёт, каждые REPS.praise.every даём короткую похвалу (level ok, без звука).
+   * Не чаще gapMs и никогда поверх ошибки: у похвалы самый низкий приоритет, любая подсказка ошибки её вытесняет,
+   * а если на экране уже висит подсказка ошибки, feedback похвалу не покажет и серия ждёт следующего круга.
+   */
+  function cheer(t) {
+    streak += 1;
+    bestStreak = Math.max(bestStreak, streak);
+    const p = REPS.praise;
+    if (!feedback || p.every <= 0 || streak % p.every !== 0 || t - lastPraiseAt < p.gapMs) return;
+    const pool = def.praise ?? PRAISE;
+    const shown = feedback.hint(pool[praiseN % pool.length], { code: 'praise', priority: 0, level: 'ok', speak: false, ttl: p.ttlMs });
+    if (!shown) return;
+    lastPraiseAt = t;
+    praiseN += 1;
+  }
+
   function handle(ev, t) {
     if (ev.type === 'rep') {
-      if (attempt.length) reject(attempt[0], t);
+      const clean = attempt.length === 0;
+      if (!clean) reject(attempt[0], t);
       else {
         c.count += 1;
         reps.push({ min: ev.min, downMs: ev.downMs });
@@ -335,6 +363,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
       const slow = def.tempo?.(ev, cfg);
       if (slow) once(slow.rule, slow.value);
       attempt = [];
+      if (clean && !slow) cheer(t);
     } else if (ev.type === 'valley' || ev.type === 'peak') {
       const miss = def.turn?.(ev, cfg);
       if (!miss) return;
@@ -492,6 +521,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
           rejectedText: describeRejected(byReason),
           deepestAngle: mins.length ? Math.round(Math.min(...mins)) : null,
           avgAngle: mins.length ? Math.round(mins.reduce((s, v) => s + v, 0) / mins.length) : null,
+          bestStreak,
         },
       };
     },
