@@ -108,8 +108,14 @@ export function installHost({ bus, app, camera, ui = appUi, Peer: PeerClass = nu
   let idTries = 0;
   let reconnects = 0;
   let reconnectTimer = 0;
+  let beatTimer = null; // пульс: ping друзьям и отключение молчунов, пока есть хоть один друг
 
   const readyPayload = () => ({ id, url, friends: core.watching });
+
+  function beat() {
+    core.tick();
+    beatTimer = phase === 'stopped' ? null : setTimeout(beat, MONEY.friend.pingMs);
+  }
 
   function fail(error, err) {
     if (phase === 'stopped') return;
@@ -146,7 +152,9 @@ export function installHost({ bus, app, camera, ui = appUi, Peer: PeerClass = nu
       },
       close: () => conn.close(),
     };
-    conn.on('open', () => core.attach(fid, link));
+    conn.on('open', () => {
+      if (core.attach(fid, link) && beatTimer == null) beatTimer = setTimeout(beat, MONEY.friend.pingMs);
+    });
     conn.on('data', (data) => core.receive(fid, data));
     conn.on('close', () => core.detach(fid, link));
     conn.on('error', (e) => warn('conn', e));
@@ -233,6 +241,8 @@ export function installHost({ bus, app, camera, ui = appUi, Peer: PeerClass = nu
     stop() {
       phase = 'stopped';
       clearTimeout(reconnectTimer);
+      if (beatTimer != null) clearTimeout(beatTimer);
+      beatTimer = null;
       core.dispose();
       try {
         peer?.destroy();
@@ -262,7 +272,14 @@ export function createGuest({ hostId, bus, name, avatar, Peer: PeerClass = null,
   let conn = null;
   let call = null;
   let timer = 0;
+  let beatTimer = null; // пульс: ping хосту и проверка, слышно ли его
   let stopped = false;
+
+  const beat = () => {
+    beatTimer = null;
+    if (stopped) return;
+    if (io.tick()) beatTimer = setTimeout(beat, MONEY.friend.pingMs);
+  };
 
   const fail = (error, err) => {
     clearTimeout(timer);
@@ -278,7 +295,8 @@ export function createGuest({ hostId, bus, name, avatar, Peer: PeerClass = null,
   function wire(c) {
     c.on('open', () => {
       clearTimeout(timer);
-      io.open({ send: (msg) => c.send(JSON.stringify(msg)) });
+      io.open({ send: (msg) => c.send(JSON.stringify(msg)), close: () => c.close() });
+      if (beatTimer == null) beatTimer = setTimeout(beat, MONEY.friend.pingMs);
     });
     c.on('data', (data) => io.message(parseWire(data)));
     c.on('close', () => io.closed());
@@ -327,6 +345,8 @@ export function createGuest({ hostId, bus, name, avatar, Peer: PeerClass = null,
   api.stop = function stop() {
     stopped = true;
     clearTimeout(timer);
+    if (beatTimer != null) clearTimeout(beatTimer);
+    beatTimer = null;
     for (const close of [() => call?.close(), () => conn?.close(), () => peer?.destroy()]) {
       try {
         close();
@@ -334,7 +354,7 @@ export function createGuest({ hostId, bus, name, avatar, Peer: PeerClass = null,
         /* уже закрыт */
       }
     }
-    io.closed({ left: true });
+    io.closed();
   };
 
   return api;
