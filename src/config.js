@@ -60,6 +60,8 @@ export const CHALLENGES = {
     placement: 'Экран ноутбука вертикально, встань боком в 2,5-3 м, свет спереди, окно не за спиной' },
   pushup: { label: 'Отжимания', unit: 'повторы', model: 'pose', emoji: '💪', targets: [10, 20, 30], defaultTarget: 20, limitSec: 120,
     placement: 'Камера на полу строго сбоку в 1,5-2,5 м, всё тело в кадре, свет спереди' },
+  plank: { label: 'Планка', unit: 'секунды', model: 'pose', emoji: '🧱', targets: [30, 60, 120], defaultTarget: 60, limitSec: 180,
+    placement: 'Камера на полу строго сбоку в 1,5-2,5 м, всё тело в кадре, свет спереди' },
   meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 300, 600], defaultTarget: 60, limitSec: null,
     placement: 'Сядь напротив камеры, лицо по центру кадра' },
 };
