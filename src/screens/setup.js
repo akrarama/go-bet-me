@@ -10,8 +10,12 @@ import { wallet } from '../wallet.js';
 import { gestures } from '../vision/gestures.js';
 import { setHold, secText } from './idle.js';
 
-/** Русское множественное число: plural(5, 'повтор', 'повтора', 'повторов') → 'повторов'. */
+/**
+ * Русское множественное число: plural(5, 'повтор', 'повтора', 'повторов') → 'повторов'.
+ * Дробным числам нужна форма единственного числа в родительном падеже: «4,5 кредита», «0,5 секунды».
+ */
 export function plural(n, one, few, many) {
+  if (!Number.isInteger(n)) return few;
   const a = Math.abs(n) % 100;
   const b = a % 10;
   if (a > 10 && a < 20) return many;
