@@ -441,7 +441,7 @@ function walletTests(t) {
 // ─── Боты и лента (src/friends/bots.js) ──────────────────────────
 
 import { MONEY } from '../src/config.js';
-import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive } from '../src/friends/bots.js';
+import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive, countVars } from '../src/friends/bots.js';
 
 const [DIMA, ANYA] = MONEY.bots;
 const templates = () => [...Object.values(LINES).flatMap((byType) => Object.values(byType).flat()), ...Object.values(FAULT_LINES).flat()];
@@ -485,6 +485,18 @@ function botsTests(t) {
     a.eq(trimmed.status, 'trimmed');
     a.eq(trimmed.bet.amount, 2);
     a.eq(trimmed.toast.text, 'Аня поставила 2 против тебя, больше в пул не влезло');
+  });
+
+  t.test('боты: в медитации счёт в секундах с единицей, в повторах голое число', (a) => {
+    const sec = countVars(15, 60, 'секунды');
+    a.eq(sec.n, '15 с');
+    a.eq(sec.left, '45 с');
+    a.eq(fill(LINES.milestone.all[0], DIMA, lineVars(DIMA, sec)), 'Уже 15 с? Везёт новичкам');
+    const reps = countVars(5, 15, 'повторы');
+    a.eq(reps.n, 5);
+    a.eq(reps.left, 10);
+    for (const tpl of [...LINES.milestone.all, ...LINES.milestone.meditation])
+      a.ok(fill(tpl, ANYA, lineVars(ANYA, { ...sec, target: 60 })).length <= 45, `длинно: ${tpl}`);
   });
 
   t.test('боты: одна и та же реплика не звучит два раза подряд', (a) => {

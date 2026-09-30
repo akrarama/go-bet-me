@@ -23,6 +23,8 @@ export const DEBUG_FAST = DEBUG && param('fast') === '1';
 export const DEBUG_STATE = DEBUG ? param('state') : null;
 /** ?type=pushup: тип челленджа по умолчанию (только с ?debug=1). */
 export const DEBUG_TYPE = DEBUG ? param('type') : null;
+/** ?join=<peerId>: страница друга по ссылке (P1), без камеры и моделей. */
+export const JOIN_ID = param('join');
 
 // ─── Координатор ────────────────────────────────────────────────
 
@@ -32,6 +34,8 @@ export const APP = {
   voidAfterMs: 5000, // камера пропала дольше: VOID, всем возврат
   countdownSec: DEBUG_FAST ? 0 : 3, // 3, 2, 1 перед стартом LIVE
   resultDelayMs: DEBUG_FAST ? 0 : 1600, // пауза между финишем и экраном итогов
+  readyHoldMs: 1000, // «Встань в позицию»: все галочки держатся столько, дальше отсчёт
+  readyMaxMs: DEBUG_FAST ? 0 : 20000, // не встал в позицию за столько: отсчёт всё равно (счёт и так идёт только в правильной позе)
 };
 
 const MP = '0.10.35';
@@ -52,9 +56,12 @@ export const VISION = {
 
 /** Типы челленджей. SETUP берёт варианты отсюда. limitSec: null = без лимита времени. */
 export const CHALLENGES = {
-  squat: { label: 'Приседания', unit: 'повторы', model: 'pose', emoji: '🏋️', targets: [10, 20, 30], defaultTarget: 10, limitSec: 90 },
-  pushup: { label: 'Отжимания', unit: 'повторы', model: 'pose', emoji: '💪', targets: [10, 20, 30], defaultTarget: 20, limitSec: 120 },
-  meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 1800], defaultTarget: 60, limitSec: null },
+  squat: { label: 'Приседания', unit: 'повторы', model: 'pose', emoji: '🏋️', targets: [10, 20, 30], defaultTarget: 10, limitSec: 90,
+    placement: 'Ноутбук на столе, встань боком в 2-3 м, чтобы камера видела тебя с головы до ног' },
+  pushup: { label: 'Отжимания', unit: 'повторы', model: 'pose', emoji: '💪', targets: [10, 20, 30], defaultTarget: 20, limitSec: 120,
+    placement: 'Камера на полу сбоку в 1,5-2,5 м, всё тело в кадре' },
+  meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 1800], defaultTarget: 60, limitSec: null,
+    placement: 'Сядь напротив камеры, лицо по центру кадра' },
 };
 export const STAKES = [5, 10, 20];
 export const DEFAULT_TYPE = 'squat';
@@ -150,7 +157,7 @@ export const MONEY = {
 // ─── Блок 4: Медитация ──────────────────────────────────────────
 
 export const MEDITATION = {
-  eyesClosedMin: 0.5, // (eyeBlinkLeft + eyeBlinkRight) / 2
+  eyesClosedMin: 0.4, // (eyeBlinkLeft + eyeBlinkRight) / 2; не 0.5: в очках и при тусклом свете закрытые глаза дают 0.4-0.6, открытые обычно ниже 0.3
   eyesHysteresis: 0.08, // закрытые глаза считаем открытыми, только когда ниже eyesClosedMin − это (не мигает на пороге)
   eyesEma: 0.5, // сглаживание моргания
   headMoveMax: 0.04, // смещение носа за 1 с, доля ширины кадра

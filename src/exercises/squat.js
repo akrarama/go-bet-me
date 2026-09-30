@@ -17,6 +17,8 @@
 //   lives, maxLives          жизни (null, если не нужны)
 //   start(t)                 старт после отсчёта
 //   frame(frame, t)          кадр, где frame.ran === model
+//   ready(frame, t)          необязательно: «Встань в позицию» до отсчёта → { ok, checks: [{ id, text, ok }] },
+//                            без событий и подсказок; приседания: тело в кадре, боком, стоишь прямо
 //   stop()                   уход с экрана (необязательно)
 //   summary() → { faults: [{ code, text, count }], rejected: [{ code, text, at }], extra }
 //   draw(frame, draw)        своя отрисовка поверх видео (необязательно)
@@ -70,6 +72,17 @@ export const GATES = {
   stand: { hint: 'Встань прямо, боком к камере' },
   front: { hint: 'Повернись боком к камере, так видно колени и спину' },
 };
+
+/**
+ * Положение до старта («Встань в позицию»): те же условия, что пропускают кадр в счёт (gate ниже).
+ * Тело в кадре добавляет сам движок (reps.js ready).
+ */
+const isUpright = (m) => m.upright;
+const isSide = (m) => !m.front;
+export const CHECKS = [
+  { id: 'side', text: 'Боком к камере', test: isSide },
+  { id: 'stand', text: 'Стоишь прямо', test: isUpright },
+];
 
 /** Стоит лицом к камере или боком: ширина плеч в кадре к длине корпуса, с запасом от дрожания. */
 export function createView(cfg = REPS.squat) {
@@ -171,7 +184,8 @@ export function createController(deps) {
       const m = measure(a);
       return { ...m, rise: floor.update(feetY(a.lm, a.idx), a.t), front: view.update(m.span) };
     },
-    gate: (m) => (m.rise > cfg.jumpRise && m.angle > cfg.jumpKneeMin ? GATES.jump : !m.upright ? GATES.stand : m.front ? GATES.front : null),
+    gate: (m) => (m.rise > cfg.jumpRise && m.angle > cfg.jumpKneeMin ? GATES.jump : !isUpright(m) ? GATES.stand : !isSide(m) ? GATES.front : null),
+    checks: CHECKS,
     rules: [RULES.kneesOverToes, RULES.lean],
     missDelayMs: cfg.missDelayMs,
     turn(ev) {

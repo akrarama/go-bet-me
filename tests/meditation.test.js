@@ -57,9 +57,12 @@ export default (t) => {
   // ─── face.js ───────────────────────────────────────────────
 
   t.test('face: глаза закрыты, когда среднее моргание больше порога', (a) => {
+    const both = (v) => ({ eyeBlinkLeft: v, eyeBlinkRight: v });
     a.near(blink({ eyeBlinkLeft: 0.6, eyeBlinkRight: 0.5 }), 0.55);
     a.eq(eyesClosed({ eyeBlinkLeft: 0.6, eyeBlinkRight: 0.5 }), true);
-    a.eq(eyesClosed({ eyeBlinkLeft: 0.5, eyeBlinkRight: 0.5 }), false, 'ровно порог: ещё открыты');
+    a.eq(eyesClosed(both(M.eyesClosedMin)), false, 'ровно порог: ещё открыты');
+    a.eq(eyesClosed(both(0.45)), true, 'закрытые глаза в очках или при тусклом свете дают 0.4-0.6');
+    a.eq(eyesClosed(both(0.3)), false, 'открытые глаза при взгляде вниз обычно ниже 0.3');
     a.eq(eyesClosed(OPEN), false);
     a.eq(blink(null), null);
     a.eq(eyesClosed(undefined), false);
@@ -447,7 +450,8 @@ export default (t) => {
 
   t.test('кадр без лица не сбивает гистерезис: мягко закрытые глаза остаются закрытыми', (a) => {
     const { c, run, codes } = setup();
-    const soft = { eyeBlinkLeft: 0.46, eyeBlinkRight: 0.46 };
+    const band = M.eyesClosedMin - M.eyesHysteresis / 2; // внутри гистерезиса: закрытыми держит только он
+    const soft = { eyeBlinkLeft: band, eyeBlinkRight: band };
     const firm = { eyeBlinkLeft: 0.7, eyeBlinkRight: 0.7 };
     run(8000, () => ({ faces: [face()], blendshapes: [firm] }));
     run(12000, () => ({ faces: [face()], blendshapes: [soft] }));

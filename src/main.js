@@ -1,7 +1,7 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { DEBUG, DEBUG_STATE, VISION, CHALLENGES } from './config.js';
+import { DEBUG, DEBUG_STATE, VISION, CHALLENGES, JOIN_ID } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
@@ -153,4 +153,24 @@ async function boot() {
   app.go(DEBUG_STATE && SCREENS[DEBUG_STATE] ? DEBUG_STATE : 'IDLE');
 }
 
-boot();
+/** Страница друга по ссылке ?join=<id> (P1): без камеры и моделей, только экран FRIEND (раздел 14.2). */
+async function bootFriend(hostId) {
+  const ctx = makeContext();
+  app.init(ctx);
+  debug.mount($('#debug'));
+  guardInput();
+  document.body.classList.add('is-friend');
+  ui.loader.show('Открываю челлендж друга');
+  try {
+    const { default: friend } = await import('./screens/friend.js');
+    app.register('FRIEND', friend);
+  } catch (err) {
+    console.error(err);
+    return ui.fatal('Ссылка не открылась', 'Обнови страницу или попроси у друга новую ссылку.');
+  }
+  ui.loader.hide();
+  app.go('FRIEND', { hostId });
+}
+
+if (JOIN_ID) bootFriend(JOIN_ID);
+else boot();
