@@ -451,6 +451,28 @@ export default (t) => {
     a.eq(s.ctrl.count, 1);
   });
 
+  t.test('приседания лицом к ноутбуку (30 и 15 fps, с дрожанием): без счёта и ложных ошибок, подсказка «повернись боком» за полсекунды', (a) => {
+    const FRONT_UP = { knee: 176, shin: 0, lean: 2 };
+    for (const [fps, step] of [[30, 1], [15, 2]]) {
+      const s = setup(squat);
+      const make = (p) => squatPose({ ...p, facing: true, front: true });
+      const play = (frames) => s.feed((step === 1 ? frames : halfRate(frames)), { dt: 1000 / fps });
+      // лицом к камере колено в кадре сгибается слабо (бедро уходит на камеру), берём и слабый, и глубокий вариант
+      play(jitter(hold(make(FRONT_UP), 16)));
+      a.eq(s.feedback.current?.text, 'Повернись боком к камере, так видно колени и спину', `${fps} fps: подсказка сразу`);
+      a.eq(s.feedback.current?.level, 'info', `${fps} fps: это совет, не ошибка`);
+      for (const low of [{ knee: 130, shin: 6, lean: 10 }, { knee: 92, shin: 10, lean: 16 }]) {
+        for (let i = 0; i < 2; i++) play(jitter(rep(make, FRONT_UP, low, 1700)));
+      }
+      play(jitter(hold(make(FRONT_UP), 10)));
+      a.eq(s.ctrl.count, 0, `${fps} fps: лицом не считаем`);
+      a.eq(s.of('fault').length, 0, `${fps} fps: ни одной ложной ошибки`);
+      a.eq(s.of('rejected').length, 0, `${fps} fps: лог незасчитанных пуст`);
+      a.eq(s.feedback.current?.text, 'Повернись боком к камере, так видно колени и спину', `${fps} fps: подсказка висит`);
+      a.eq(s.ctrl.summary().faults.length, 0, `${fps} fps: итоги без ошибок`);
+    }
+  });
+
   // ─── Отжимания ───
   t.test('отжимания: чистые повторы засчитываются', (a) => {
     const s = setup(pushup);
