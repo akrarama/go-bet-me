@@ -6,7 +6,8 @@
 // Сообщения хоста (CLAUDE.md, раздел 14.2): поле t = вид: lobby, bet:ok, bet:full, start, count, fault, rejected, end, void.
 // Камеры и моделей экран не трогает (model: 'none': с null app.go взял бы модель жестов). Стили: styles/friend.css.
 // Состояние чистое (reduce, betOptions, lobbyView, resultView ...): тесты идут в jsc, DOM только в enter и ниже.
-// Заглушка вместо игрока: ?debug=1&join=demo (или нет peer.js в ?debug=1); клавиша f следующий шаг раунда, g ошибка игрока.
+// Заглушка вместо игрока: ?debug=1&join=demo (или нет peer.js в ?debug=1); клавиши f следующий шаг раунда, g ошибка игрока,
+// p особые случаи лобби (игрок меняет условия, стартует, ставки закрыты, отключился, пополнение кредитов).
 
 import { CHALLENGES, MONEY, STAKES } from '../config.js';
 import { esc, formatTime } from '../ui.js';
@@ -18,6 +19,7 @@ const SLOW_MS = 10000; // подключение тянется: подсказ�
 const GIVEUP_MS = 30000; // не подключились: ошибка и кнопка «Повторить»
 const BET_WAIT_MS = 6000; // на ставку нет ответа: можно ставить снова
 const REACT_GAP_MS = 1200; // реакция не чаще
+const TOPUP_SHOW_MS = 5000; // плашка «Пополнили до ...» держится столько
 const VIDEO_LATE_MS = 10000; // видео не пришло за это время после старта: объясняем, счёт идёт и без него
 const LOST_SHOW_MS = 4000; // связь с игроком пропала посреди эфира: столько только плашка, потом карточка
 const LOST_GIVEUP_MS = 30000; // игрок так и не вернулся: предлагаем обновить страницу (ставка вернётся)
@@ -25,7 +27,7 @@ const FEE = 0.1; // комиссия для заглушки: как APP_FEE в 
 const BETS = MONEY?.friend?.bets ?? STAKES; // те же суммы принимает хост
 // Что ответил guest.bet(): 'sent' ждём ответа хоста, остальное сразу объясняем словами
 const BET_ANSWERS = {
-  closed: 'Ставки уже закрыты',
+  closed: 'Ставки закрыты',
   repeat: 'Ты уже поставил на этот раунд',
   poor: 'Не хватает кредитов',
   invalid: 'Такую ставку сделать нельзя',
@@ -118,8 +120,11 @@ export function initialState(hostId = '') {
     myBet: null, // моя ставка против на этот челлендж
     pending: null, // ставка отправлена, ответа ещё нет
     notice: null, // { tone: 'ok' | 'warn', text }: ответ хоста на ставку
+    open: true, // хост принимает ставки (lobby.open !== false)
+    note: null, // пометка хоста в lobby: 'setup' игрок меняет условия, 'starting' стартует
     balance: null, // мой баланс, кр.
     walletDelta: null,
+    topup: null, // кошелёк пополнили до этой суммы: плашка на несколько секунд
     count: 0,
     target: 0,
     unit: '',
@@ -177,7 +182,7 @@ function onMsg(S, msg, now) {
     case 'lobby': {
       const challenge = challengeOf(msg.challenge, S.challenge);
       const fresh = challenge?.id !== S.challenge?.id;
-      const base = fresh ? { ...S, myBet: null, pending: null, feed: [], result: null, voidReason: null, count: 0, startedAt: 0 } : S;
+      const base = fresh ? { ...S, myBet: null, pending: null, notice: null, feed: [], result: null, voidReason: null, count: 0, startedAt: 0 } : S;
       // итог или раунд не сбрасываем тем же лобби: следующий раунд приходит с новым челленджем
       const stay = !fresh && (S.phase === 'live' || S.phase === 'result' || S.phase === 'void');
       return {
@@ -186,6 +191,8 @@ function onMsg(S, msg, now) {
         challenge,
         left: Math.max(0, num(msg.left)),
         bets: cleanBets(msg.bets),
+        open: msg.open !== false,
+        note: typeof msg.note === 'string' ? clip(msg.note, 20) : null,
         notice: base.notice?.tone === 'ok' ? base.notice : null,
         phase: stay ? S.phase : 'lobby',
         link: 'open',
@@ -196,9 +203,11 @@ function onMsg(S, msg, now) {
       return { ...S, myBet: Math.max(0, num(msg.amount)), pending: null, notice: { tone: 'ok', text: 'Ставка принята' } };
     case 'bet:full': {
       const left = Math.max(0, num(msg.left));
-      const text = left > 0 ? `Осталось только ${kr(left)}, выбери меньше` : 'Пул уже полон, можно только смотреть';
+      const text = left > 0 ? `Осталось только ${kr(left)}, выбери меньше` : 'Пул полон';
       return { ...S, left, pending: null, notice: { tone: 'warn', text } };
     }
+    case 'bet:closed':
+      return { ...S, open: false, pending: null, notice: { tone: 'warn', text: 'Ставки закрыты' } };
     case 'start': {
       const challenge = challengeOf(msg.challenge, S.challenge);
       return {
@@ -220,6 +229,8 @@ function onMsg(S, msg, now) {
         videoLate: false,
         videoEnded: false,
         lostAt: null,
+        open: false,
+        note: null,
       };
     }
     case 'count': {
@@ -271,8 +282,12 @@ export function reduce(S, ev) {
     }
     case 'video:late':
       return S.phase === 'live' && !S.hasVideo && !S.videoEnded ? { ...S, videoLate: true } : S;
-    case 'wallet':
-      return { ...S, balance: typeof ev.balance === 'number' && Number.isFinite(ev.balance) ? ev.balance : S.balance, walletDelta: num(ev.delta, S.walletDelta) };
+    case 'wallet': {
+      const balance = typeof ev.balance === 'number' && Number.isFinite(ev.balance) ? ev.balance : S.balance;
+      return { ...S, balance, walletDelta: num(ev.delta, S.walletDelta), topup: ev.reason === 'topup' && balance != null ? balance : S.topup };
+    }
+    case 'topup:drop':
+      return S.topup == null ? S : { ...S, topup: null };
     case 'bet:sent':
       return { ...S, pending: ev.amount, notice: null };
     case 'bet:result': {
@@ -303,6 +318,8 @@ export function betOptions(S, amounts = BETS) {
     const selected = S.myBet === amount;
     let reason = null;
     if (S.myBet != null) reason = 'placed';
+    else if (S.note === 'setup') reason = 'setup';
+    else if (S.open === false) reason = 'closed';
     else if (S.pending != null) reason = 'pending';
     else if (amount > S.left) reason = S.left <= 0 ? 'full' : 'left';
     else if (S.balance != null && amount > S.balance) reason = 'balance';
@@ -310,13 +327,15 @@ export function betOptions(S, amounts = BETS) {
   });
 }
 
-/** Подсказка под кнопками: ответ хоста, иначе почему нельзя поставить. */
+/** Подсказка под кнопками: моя ставка, состояние хоста (меняет условия, стартует), ответ на ставку, иначе почему нельзя. */
 export function lobbyNotice(S) {
-  if (S.notice) return S.notice;
   if (S.myBet != null) return { tone: 'ok', text: 'Ставка принята' };
+  if (S.note === 'setup') return { tone: 'info', text: 'Игрок меняет условия, подожди' };
+  if (S.open === false) return { tone: 'info', text: S.note === 'starting' ? 'Игрок стартует, ставки закрыты' : 'Ставки закрыты' };
+  if (S.notice) return S.notice;
   if (S.challenge) {
-    if (S.left <= 0) return { tone: 'warn', text: 'Пул уже полон, можно только смотреть' };
-    if (S.balance != null && S.balance < Math.min(...BETS)) return { tone: 'warn', text: 'Не хватает кредитов для ставки' };
+    if (S.left <= 0) return { tone: 'warn', text: 'Пул полон, можно только смотреть' };
+    if (S.balance != null && S.balance < Math.min(...BETS) && S.topup == null) return { tone: 'warn', text: 'Обнови страницу, чтобы пополнить кредиты' };
   }
   return null;
 }
@@ -325,13 +344,15 @@ export function lobbyNotice(S) {
 export function lobbyView(S) {
   const d = describeChallenge(S.challenge);
   const taken = Math.min(d.stake, Math.max(0, d.stake - S.left));
+  const closed = S.open === false;
   return {
+    mode: S.note === 'setup' ? 'setup' : 'open', // setup: вместо ставок карточка «Игрок меняет условия»
     title: `${d.emoji} ${d.label}: ${d.goal}`,
     facts: [d.time && `⏱ ${d.time}`, d.stake && `Ставка игрока ${kr(d.stake)}`].filter(Boolean),
     pool: { taken, total: d.stake, text: `${kr(taken)} из ${kr(d.stake)}`, ratio: d.stake ? taken / d.stake : 0 },
     options: betOptions(S),
     notice: lobbyNotice(S),
-    foot: S.myBet != null ? `Ты поставил ${kr(S.myBet)} против. Ждём старт` : 'Игрок нажмёт старт, и ставки закроются',
+    foot: S.myBet != null ? `Ты поставил ${kr(S.myBet)} против. ${closed ? 'Игрок стартует' : 'Ждём старт'}` : closed ? '' : 'Игрок нажмёт старт, и ставки закроются',
   };
 }
 
@@ -369,12 +390,16 @@ export function resultView(S) {
 
 const VOID_REASONS = { camera: 'У игрока пропала камера' };
 
-/** Раунд отменён: причина и что с моей ставкой. */
+/** Раунд отменён: причина и что с моей ставкой. Игрок отключился (left): раунда больше нет, можно зайти заново. */
 export function voidView(S) {
+  if (S.voidReason === 'left') {
+    return { title: 'Игрок отключился', detail: S.myBet != null ? 'Ставка вернулась. Попроси новую ссылку' : 'Попроси у игрока новую ссылку', line: '', retry: true };
+  }
   return {
     title: 'Раунд отменён',
     detail: own(VOID_REASONS, S.voidReason) ?? 'Игрок прервал челлендж',
     line: S.myBet != null ? 'Ставка вернулась' : 'Ты смотрел без ставки',
+    retry: false,
   };
 }
 
@@ -448,11 +473,17 @@ const skeleton = () => `
     </section>
 
     <section class="friend__view friend__view--lobby">
-      <div class="panel panel--narrow friend__card">
+      <div class="panel panel--narrow friend__card" data-lobby data-mode="open">
         <div class="friend__me">
           <span class="friend__avatar" data-me-avatar></span>
           <span class="friend__me-name" data-me-name></span>
           <span class="friend__me-balance" data-me-balance></span>
+        </div>
+        <div class="friend__topup" data-topup role="status" hidden></div>
+        <div class="friend__setup" data-setup>
+          <div class="friend__nv-icon">⏳</div>
+          <h2 class="h2">Игрок меняет условия</h2>
+          <p class="muted">Подожди, скоро появится новый челлендж</p>
         </div>
         <div class="friend__eyebrow">Игрок ставит на себя</div>
         <h2 class="friend__headline" data-ch-title></h2>
@@ -514,7 +545,8 @@ const skeleton = () => `
         <div class="friend__delta" data-res-delta hidden></div>
         <p class="friend__line" data-res-line></p>
         <div class="friend__wallet" data-res-wallet hidden><span>Твой баланс</span><b data-res-balance></b></div>
-        <p class="friend__wait">Ждём следующий раунд<span class="friend__dots"><i></i><i></i><i></i></span></p>
+        <button class="friend__btn" type="button" data-void-retry hidden>Повторить</button>
+        <p class="friend__wait" data-res-wait>Ждём следующий раунд<span class="friend__dots"><i></i><i></i><i></i></span></p>
       </div>
     </section>
   </div>`;
@@ -541,7 +573,8 @@ function collect(root) {
     busy: q('[data-busy]'), connectTitle: q('[data-connect-title]'), connectText: q('[data-connect-text]'), retry: q('[data-retry]'),
     meAvatar: q('[data-me-avatar]'), meName: q('[data-me-name]'), meBalance: q('[data-me-balance]'),
     chTitle: q('[data-ch-title]'), facts: q('[data-facts]'), poolText: q('[data-pool-text]'), poolFill: q('[data-pool-fill]'), bets: q('[data-bets]'),
-    betRow: q('[data-bet-row]'), notice: q('[data-notice]'), foot: q('[data-foot]'),
+    betRow: q('[data-bet-row]'), notice: q('[data-notice]'), foot: q('[data-foot]'), lobby: q('[data-lobby]'), topup: q('[data-topup]'),
+    voidRetry: q('[data-void-retry]'), resWait: q('[data-res-wait]'),
     video: q('[data-video]'), novideo: q('[data-novideo]'), nvBusy: q('[data-nv-busy]'), nvIcon: q('[data-nv-icon]'), nvTitle: q('[data-nv-title]'), nvText: q('[data-nv-text]'),
     lost: q('[data-lost]'), lostTitle: q('[data-lost-title]'), lostText: q('[data-lost-text]'), reload: q('[data-reload]'),
     timer: q('[data-timer]'), timerText: q('[data-timer-text]'), stake: q('[data-stake]'), feed: q('[data-feed]'),
@@ -570,6 +603,9 @@ function paintLobby(r) {
   els.meAvatar.textContent = me.avatar;
   els.meName.textContent = me.name;
   els.meBalance.textContent = S.balance == null ? '' : kr(S.balance);
+  els.lobby.dataset.mode = v.mode;
+  els.topup.hidden = S.topup == null;
+  if (S.topup != null) els.topup.textContent = `Пополнили до ${kr(S.topup)}`;
   els.chTitle.textContent = v.title;
   els.facts.innerHTML = v.facts.map((f) => `<span class="friend__fact">${esc(f)}</span>`).join('');
   els.poolText.textContent = v.pool.text;
@@ -589,6 +625,7 @@ function paintLobby(r) {
     els.notice.textContent = v.notice.text;
   }
   els.foot.textContent = v.foot;
+  els.foot.hidden = !v.foot;
 }
 
 function bump(el) {
@@ -676,6 +713,8 @@ function paintResult(r) {
   }
   els.resWallet.hidden = S.balance == null;
   if (S.balance != null) els.resBalance.textContent = kr(S.balance);
+  els.voidRetry.hidden = done || !v.retry;
+  els.resWait.hidden = !done && v.retry; // игрок отключился: следующего раунда не будет
 }
 
 function paint(r) {
@@ -709,6 +748,10 @@ function dispatch(r, ev) {
       const v = resultView(S);
       sound.play(v.deltaTone === 'up' || (v.deltaTone === 'zero' && v.success) ? 'win' : 'lose');
     }
+  }
+  if (S.topup != null && S.topup !== prev.topup) {
+    const epoch = (r.topupEpoch = (r.topupEpoch ?? 0) + 1);
+    r.ctx.timeout(() => r.topupEpoch === epoch && dispatch(r, { type: 'topup:drop' }), TOPUP_SHOW_MS);
   }
   if (S.seq !== prev.seq) {
     const item = S.feed[S.feed.length - 1];
@@ -746,6 +789,26 @@ function armTimers(r) {
   r.ctx.timeout(() => r.attempt === at && dispatch(r, { type: 'giveup' }), GIVEUP_MS);
 }
 
+/** «Повторить»: у настоящего гостя connect() второй раз ничего не делает, поэтому старого останавливаем и берём нового. */
+async function retry(r) {
+  if (r.retrying) return;
+  r.retrying = true;
+  try {
+    const old = r.guest;
+    if (old && old !== r.params.guest) old.stop?.();
+    dispatch(r, { type: 'retry' });
+    armTimers(r);
+    const guest = r.params.guest ?? (await makeGuest(r.ctx, r.params));
+    if (run !== r) return guest !== r.params.guest ? guest?.stop?.() : undefined;
+    await attach(r, guest);
+  } catch (err) {
+    console.warn('[friend] повтор', err);
+    dispatch(r, { type: 'status', status: 'error' });
+  } finally {
+    r.retrying = false;
+  }
+}
+
 /** Подключаем нажатия: ставка, реакция, повтор. Экран управляется касанием. */
 function wire(r) {
   const { els, ctx } = r;
@@ -779,25 +842,8 @@ function wire(r) {
     if (sent) floatEmoji(btn, reaction.emoji);
     ctx.timeout(() => (btn.disabled = false), REACT_GAP_MS);
   });
-  els.retry.addEventListener('click', async () => {
-    if (r.retrying) return;
-    r.retrying = true;
-    try {
-      // connect() у настоящего гостя второй раз ничего не делает: старого останавливаем, берём нового
-      const old = r.guest;
-      if (old && old !== r.params.guest) old.stop?.();
-      dispatch(r, { type: 'retry' });
-      armTimers(r);
-      const guest = r.params.guest ?? (await makeGuest(ctx, r.params));
-      if (run !== r) return guest !== r.params.guest ? guest?.stop?.() : undefined;
-      await attach(r, guest);
-    } catch (err) {
-      console.warn('[friend] повтор', err);
-      dispatch(r, { type: 'status', status: 'error' });
-    } finally {
-      r.retrying = false;
-    }
-  });
+  els.retry.addEventListener('click', () => retry(r));
+  els.voidRetry.addEventListener('click', () => retry(r));
   els.reload.addEventListener('click', () => location.reload()); // перезагрузка возвращает ставку недоигранного раунда
   els.video.addEventListener('playing', () => dispatch(r, { type: 'stream' }));
   // близкие пропорции видео и экрана: во весь экран (cover), иначе целиком с полями (contain), чтобы не срезать игрока
@@ -857,7 +903,7 @@ export default {
       attachStream(r, stream); // «видео идёт» скажет событие playing
       if (!stream) dispatch(r, { type: 'stream:end' });
     });
-    ctx.on('guest:wallet', ({ balance, delta }) => dispatch(r, { type: 'wallet', balance, delta }));
+    ctx.on('guest:wallet', ({ balance, delta, reason }) => dispatch(r, { type: 'wallet', balance, delta, reason }));
     ctx.interval(() => tickTimer(r), 250);
     armTimers(r);
     paint(r);
@@ -894,6 +940,7 @@ function debugKeys(debug) {
   const stub = () => (run?.guest?.stub ? run.guest : null);
   debug.key('f', () => stub()?.step(), 'друг: следующий шаг раунда (заглушка)');
   debug.key('g', () => stub()?.fault(), 'друг: ошибка игрока (заглушка)');
+  debug.key('p', () => stub()?.special(), 'друг: особые случаи лобби (заглушка)');
 }
 
 /** Играет хоста: те же события шины, что пришлёт peer.js. Шаги раунда по клавише f. */
@@ -908,6 +955,7 @@ export function createStubGuest(ctx) {
   let started = false;
   let count = 0;
   let step = 0;
+  let special = 0;
   const lobby = () => send({ t: 'lobby', challenge, left, bets, you: { amount: mine } });
   const wallet = (delta = 0) => bus.emit('guest:wallet', { balance: stub.money, delta });
   const newRound = () => {
@@ -990,6 +1038,19 @@ export function createStubGuest(ctx) {
     },
     fault() {
       send({ t: 'fault', text: 'Колени выходят за носки, сядь глубже назад' });
+    },
+    /** По кругу: игрок меняет условия, новый челлендж, игрок стартует, ставки закрыты, пополнение кредитов, игрок отключился. */
+    special() {
+      const cases = [
+        () => send({ t: 'lobby', challenge, left, bets, note: 'setup', you: { amount: mine } }),
+        newRound,
+        () => send({ t: 'lobby', challenge, left: 0, bets, open: false, note: 'starting', you: { amount: mine } }),
+        () => send({ t: 'bet:closed' }),
+        () => bus.emit('guest:wallet', { balance: 100, delta: 0, reason: 'topup' }),
+        () => send({ t: 'void', reason: 'left' }),
+      ];
+      cases[special % cases.length]();
+      special += 1;
     },
   };
   return stub;
