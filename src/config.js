@@ -57,9 +57,9 @@ export const VISION = {
 /** Типы челленджей. SETUP берёт варианты отсюда. limitSec: null = без лимита времени. */
 export const CHALLENGES = {
   squat: { label: 'Приседания', unit: 'повторы', model: 'pose', emoji: '🏋️', targets: [10, 20, 30], defaultTarget: 10, limitSec: 90,
-    placement: 'Ноутбук на столе, встань боком в 2-3 м, чтобы камера видела тебя с головы до ног' },
+    placement: 'Экран ноутбука вертикально, встань боком в 2,5-3 м, свет спереди, окно не за спиной' },
   pushup: { label: 'Отжимания', unit: 'повторы', model: 'pose', emoji: '💪', targets: [10, 20, 30], defaultTarget: 20, limitSec: 120,
-    placement: 'Камера на полу сбоку в 1,5-2,5 м, всё тело в кадре' },
+    placement: 'Камера на полу строго сбоку в 1,5-2,5 м, всё тело в кадре, свет спереди' },
   meditation: { label: 'Медитация', unit: 'секунды', model: 'face', emoji: '🧘', targets: [60, 300, 600], defaultTarget: 60, limitSec: null,
     placement: 'Сядь напротив камеры, лицо по центру кадра' },
 };
