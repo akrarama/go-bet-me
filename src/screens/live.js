@@ -39,6 +39,7 @@ export default {
           <div class="position__title position__title--ready">Отлично, замри</div>
           <div class="position__place">${esc(def.placement ?? '')}</div>
           <ul class="position__checks" data-checks></ul>
+          <div class="position__hint" data-pos-hint></div>
           <div class="position__hold" aria-hidden="true"></div>
         </div>
         <div class="countdown" data-countdown hidden></div>
@@ -54,6 +55,7 @@ export default {
       timer: q('[data-timer]'), count: q('[data-count]'), progress: q('[data-progress]'), lives: q('[data-lives]'),
       countdown: q('[data-countdown]'), lost: q('[data-lost]'), lostCount: q('[data-lost-count]'), finale: q('[data-finale]'),
       rejects: q('[data-rejects]'), position: q('[data-position]'), checks: q('[data-checks]'), lostText: q('[data-lost-text]'),
+      posHint: q('[data-pos-hint]'),
     };
 
     // Лог незасчитанных повторов: последние три
@@ -164,6 +166,11 @@ function checkPosition(r, frame) {
     r.els.checks.innerHTML = checks
       .map((c) => `<li class="position__check${c.ok ? ' is-ok' : ''}"><span class="position__mark" aria-hidden="true"></span>${esc(c.text)}</li>`)
       .join('');
+  }
+  const hint = res?.ok ? '' : String(res?.hint ?? ''); // что сделать для первой непройденной галочки
+  if (hint !== r.posHint) {
+    r.posHint = hint;
+    r.els.posHint.textContent = hint;
   }
   if (res?.ok) {
     if (!r.okSince) {
