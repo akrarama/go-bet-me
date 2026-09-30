@@ -3,6 +3,10 @@
 import { MEDITATION as M } from '../src/config.js';
 import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW } from '../src/vision/face.js';
 import { createController } from '../src/exercises/meditation.js';
+import friend, {
+  REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural,
+  reduce, resultView, timerView, voidView,
+} from '../src/screens/friend.js';
 
 const W = 1280;
 const H = 720;
@@ -554,5 +558,362 @@ export default (t) => {
     a.eq(probed.c.count, plain.c.count);
     a.eq(probed.c.lives, plain.c.lives);
     a.deep(probed.codes(), plain.codes());
+  });
+
+  // ─── FRIEND: экран друга (screens/friend.js), логика без DOM ──
+
+  const CH = { id: 'c1', type: 'squat', target: 15, limitSec: 90, stake: 10 };
+  const HOST_BET = { id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true };
+  const msg = (S, m, now = 0) => reduce(S, { type: 'msg', msg: m, now });
+  const lobbyOf = (S, over = {}) => msg(S, { t: 'lobby', challenge: CH, left: 5, bets: [HOST_BET], ...over });
+
+  t.test('friend: деньги и слова: kr, plural, goalText', (a) => {
+    a.eq(kr(5), '5 кр.');
+    a.eq(kr(4.5), '4,5 кр.');
+    a.eq(kr(NaN), '0 кр.');
+    a.eq(kr(Infinity), '0 кр.');
+    a.eq(kr('7'), '0 кр.', 'строка вместо числа: не верим');
+    const rep = (n) => plural(n, 'повтор', 'повтора', 'повторов');
+    a.deep([1, 2, 5, 11, 12, 21, 22, 25].map(rep), ['повтор', 'повтора', 'повторов', 'повторов', 'повторов', 'повтор', 'повтора', 'повторов']);
+    a.eq(goalText('повторы', 15), '15 повторов');
+    a.eq(goalText('секунды', 60), '60 секунд');
+    a.eq(goalText('секунды', 61), '61 секунда');
+    a.eq(goalText('секунды', 180), '3 минуты');
+    a.eq(goalText('секунды', 1800), '30 минут');
+  });
+
+  t.test('friend: статусы связи от peer.js приводятся к четырём', (a) => {
+    a.deep(['open', 'connected', 'ready', 'OPEN'].map(linkOf), ['open', 'open', 'open', 'open']);
+    a.deep(['error', 'failed', 'peer-unavailable'].map(linkOf), ['error', 'error', 'error']);
+    a.deep(['closed', 'disconnected', 'lost'].map(linkOf), ['closed', 'closed', 'closed']);
+    a.deep(['connecting', '', undefined, 'что-то новое'].map(linkOf), ['connecting', 'connecting', 'connecting', 'connecting']);
+  });
+
+  t.test('friend: подключение → лобби → ставка → старт → счёт и ошибки → итог', (a) => {
+    let S = initialState('h1');
+    a.eq(S.phase, 'connecting');
+    S = reduce(S, { type: 'status', status: 'open' });
+    a.eq(S.link, 'open');
+    a.eq(S.phase, 'connecting', 'связь есть, условий ещё нет');
+    S = lobbyOf(S);
+    a.eq(S.phase, 'lobby');
+    a.eq(S.left, 5);
+    a.deep(S.bets, [HOST_BET]);
+    S = reduce(S, { type: 'wallet', balance: 100, delta: 0 });
+    S = reduce(S, { type: 'bet:sent', amount: 5 });
+    a.eq(S.pending, 5);
+    S = msg(S, { t: 'bet:ok', amount: 5 });
+    a.eq(S.myBet, 5);
+    a.eq(S.pending, null);
+    a.eq(S.notice.tone, 'ok');
+    S = msg(S, { t: 'start', challenge: CH, bets: [HOST_BET] }, 5000);
+    a.eq(S.phase, 'live');
+    a.eq(S.startedAt, 5000);
+    a.eq(S.target, 15);
+    a.eq(S.unit, 'повторы');
+    S = msg(S, { t: 'count', count: 4, target: 15, unit: 'повторы' });
+    S = msg(S, { t: 'fault', text: 'Колени выходят за носки' });
+    S = msg(S, { t: 'rejected', text: 'недостаточная глубина' });
+    a.eq(S.count, 4);
+    a.deep(S.feed.map((f) => [f.kind, f.text]), [['fault', 'Колени выходят за носки'], ['rejected', 'недостаточная глубина']]);
+    S = msg(S, { t: 'end', success: false, count: 6, target: 15, you: { amount: 5, delta: 4.5 } });
+    a.eq(S.phase, 'result');
+    const v = resultView(S);
+    a.eq(v.title, 'Не сделал');
+    a.eq(v.detail, '6 из 15 повторов');
+    a.eq(v.deltaText, '+4,5 кр.');
+    a.eq(v.deltaTone, 'up');
+    a.eq(v.line, 'Ты выиграл: игрок не справился');
+    a.eq(v.showDelta, true);
+  });
+
+  t.test('friend: итог проигрыша, зрителя без ставки и отмена раунда', (a) => {
+    let S = lobbyOf(initialState('h'));
+    S = msg(S, { t: 'bet:ok', amount: 5 });
+    S = msg(S, { t: 'start', challenge: CH }, 0);
+    let lost = msg(S, { t: 'end', success: true, count: 15, target: 15, you: { amount: 5, delta: -5 } });
+    a.deep([resultView(lost).title, resultView(lost).deltaText, resultView(lost).deltaTone, resultView(lost).line], ['Сделал', '−5 кр.', 'down', 'Ты проиграл: игрок справился']);
+    const watcher = msg(lobbyOf(initialState('w')), { t: 'end', success: true, count: 15, target: 15 });
+    const w = resultView(watcher);
+    a.eq(w.showDelta, false);
+    a.eq(w.line, 'Ты смотрел без ставки');
+    const cancelled = msg(S, { t: 'void', reason: 'camera' });
+    a.eq(cancelled.phase, 'void');
+    a.deep([voidView(cancelled).detail, voidView(cancelled).line], ['У игрока пропала камера', 'Ставка вернулась']);
+    a.eq(voidView(msg(lobbyOf(initialState('w')), { t: 'void', reason: 'constructor' })).detail, 'Игрок прервал челлендж', 'чужие ключи словаря не берём');
+  });
+
+  t.test('friend: кнопки ставки учитывают остаток пула, баланс и уже сделанную ставку', (a) => {
+    const S = { ...lobbyOf(initialState('h')), balance: 100 };
+    const state = (o) => betOptions(o).map((x) => x.reason);
+    a.deep(state(S), [null, 'left', 'left'], 'в пуле осталось 5: влезает только 5');
+    a.deep(state({ ...S, left: 0 }), ['full', 'full', 'full']);
+    a.deep(state({ ...S, left: 20, balance: 7 }), [null, 'balance', 'balance']);
+    a.deep(state({ ...S, left: 20 }), [null, null, null]);
+    a.deep(state({ ...S, left: 20, pending: 10 }), ['pending', 'pending', 'pending']);
+    const placed = betOptions({ ...S, left: 20, myBet: 10 });
+    a.deep(placed.map((x) => x.disabled), [true, true, true]);
+    a.deep(placed.map((x) => x.selected), [false, true, false]);
+    a.deep(betOptions(S).map((x) => x.amount), [5, 10, 20]);
+  });
+
+  t.test('friend: пул полон, ответ на ставку не пришёл, подсказка под кнопками', (a) => {
+    let S = { ...lobbyOf(initialState('h'), { left: 20 }), balance: 100 };
+    S = reduce(S, { type: 'bet:sent', amount: 20 });
+    S = msg(S, { t: 'bet:full', left: 5 });
+    a.eq(S.pending, null);
+    a.eq(S.left, 5);
+    a.eq(lobbyView(S).notice.text, 'Осталось только 5 кр., выбери меньше');
+    a.eq(lobbyView(msg(S, { t: 'bet:full', left: 0 })).notice.text, 'Пул уже полон, можно только смотреть');
+    const waiting = reduce(S, { type: 'bet:sent', amount: 5 });
+    const late = reduce(waiting, { type: 'bet:timeout' });
+    a.eq(late.pending, null);
+    a.eq(late.notice.text, 'Ответа нет, попробуй ещё раз');
+    a.eq(reduce(S, { type: 'bet:timeout' }), S, 'ставки в пути нет: ничего не меняем');
+    // новое лобби гасит предупреждение про остаток, но не «Ставка принята»
+    a.eq(lobbyOf(S, { left: 10 }).notice, null);
+    a.eq(lobbyOf(msg(S, { t: 'bet:ok', amount: 5 })).notice.tone, 'ok');
+    a.eq(lobbyView({ ...lobbyOf(initialState('h')), left: 0 }).notice.text, 'Пул уже полон, можно только смотреть');
+    a.eq(lobbyView({ ...lobbyOf(initialState('h'), { left: 20 }), balance: 3 }).notice.text, 'Не хватает кредитов для ставки');
+  });
+
+  t.test('friend: следующий раунд приходит с новым челленджем, тот же id итог не убирает', (a) => {
+    let S = msg(lobbyOf(initialState('h')), { t: 'bet:ok', amount: 5 });
+    S = msg(S, { t: 'start', challenge: CH }, 0);
+    S = msg(S, { t: 'end', success: false, count: 3, target: 15, you: { amount: 5, delta: 4.5 } });
+    const same = lobbyOf(S);
+    a.eq(same.phase, 'result', 'то же лобби: итог остаётся на экране');
+    const next = lobbyOf(S, { challenge: { ...CH, id: 'c2', type: 'pushup', target: 20, limitSec: 120 } });
+    a.eq(next.phase, 'lobby');
+    a.eq(next.myBet, null, 'новая ставка на новый раунд');
+    a.eq(next.result, null);
+    a.deep(next.feed, []);
+    a.eq(lobbyView(next).title, '💪 Отжимания: 20 повторов');
+    a.deep(lobbyView(next).facts, ['⏱ 02:00', 'Ставка игрока 10 кр.']);
+    // раунд идёт: лобби с тем же id не выбрасывает из эфира
+    const live = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0);
+    a.eq(lobbyOf(live).phase, 'live');
+  });
+
+  t.test('friend: пришёл посреди раунда: первый счёт открывает эфир, поздний счёт итог не сбрасывает', (a) => {
+    const S = msg(lobbyOf(initialState('h')), { t: 'count', count: 7, target: 15, unit: 'повторы' }, 42000);
+    a.eq(S.phase, 'live');
+    a.eq(S.startedAt, 42000);
+    a.eq(S.count, 7);
+    const joined = msg(initialState('h'), { t: 'fault', text: 'Таз провисает' }, 1000);
+    a.eq(joined.phase, 'live');
+    const done = msg(S, { t: 'end', success: true, count: 15, target: 15 });
+    a.eq(msg(done, { t: 'count', count: 15, target: 15 }).phase, 'result');
+  });
+
+  t.test('friend: ошибки игрока: не больше трёх, гаснут по одной', (a) => {
+    let S = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0);
+    for (const text of ['раз', 'два', 'три', 'четыре']) S = msg(S, { t: 'fault', text });
+    a.deep(S.feed.map((f) => f.text), ['два', 'три', 'четыре']);
+    const first = S.feed[0];
+    S = reduce(S, { type: 'feed:drop', id: first.id });
+    a.deep(S.feed.map((f) => f.text), ['три', 'четыре']);
+    a.eq(msg(S, { t: 'fault', text: '' }).feed.length, 2, 'пустой текст не рисуем');
+  });
+
+  t.test('friend: связь: до условий обрыв это ошибка, потом плашка, «Повторить» возвращает', (a) => {
+    let S = reduce(initialState('h'), { type: 'status', status: 'error' });
+    a.eq(S.phase, 'error');
+    a.eq(connectView(S).retry, true);
+    a.eq(connectView(S).busy, false);
+    a.eq(connectView({ ...S, errorKind: 'closed' }).text, 'Связь оборвалась. Проверь интернет и попробуй ещё раз');
+    S = reduce(S, { type: 'retry' });
+    a.eq(S.phase, 'connecting');
+    a.eq(connectView(S).busy, true);
+    const inLobby = reduce(lobbyOf(initialState('h')), { type: 'status', status: 'closed' });
+    a.eq(inLobby.phase, 'lobby', 'лобби не пропадает');
+    a.eq(inLobby.link, 'lost');
+    a.eq(reduce(inLobby, { type: 'status', status: 'open' }).link, 'open');
+    // долгое подключение: сначала подсказка, потом ошибка; когда связь есть, ни то ни другое
+    const slow = reduce(initialState('h'), { type: 'slow' });
+    a.eq(connectView(slow).text, 'Долго? Проверь, что игрок не закрыл страницу');
+    a.eq(connectView(slow).retry, true);
+    a.eq(reduce(initialState('h'), { type: 'giveup' }).phase, 'error');
+    const open = reduce(initialState('h'), { type: 'status', status: 'open' });
+    a.eq(reduce(open, { type: 'giveup' }).phase, 'connecting');
+    a.eq(connectView(open).text, 'Жду условия челленджа');
+    a.eq(reduce(lobbyOf(initialState('h')), { type: 'giveup' }).phase, 'lobby');
+  });
+
+  t.test('friend: таймер эфира считает назад с лимитом и вперёд без него', (a) => {
+    const timed = { ...msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 1000) };
+    a.deep(timerView(timed, 31000), { text: '01:00', low: false });
+    a.deep(timerView(timed, 84000), { text: '00:07', low: true });
+    a.eq(timerView(timed, 500000).text, '00:00', 'время вышло: не уходим в минус');
+    const med = msg(lobbyOf(initialState('h'), { challenge: { id: 'm', type: 'meditation', target: 60, limitSec: null, stake: 10 } }), { t: 'start', challenge: { id: 'm', type: 'meditation', target: 60, limitSec: null, stake: 10 } }, 1000);
+    a.deep(timerView(med, 31000), { text: '00:30', low: false });
+    a.eq(describeChallenge(med.challenge).goal, '60 секунд');
+    a.eq(describeChallenge(med.challenge).time, null);
+  });
+
+  t.test('friend: кривые сообщения хоста не ломают состояние и режутся по длине', (a) => {
+    let S = initialState('h');
+    const bad = [
+      undefined, null, 'строка', 42, {}, { t: 42 }, { t: '__proto__' },
+      { t: 'lobby', challenge: 'нет', left: 'abc', bets: 'нет' },
+      { t: 'lobby', challenge: { id: 5, type: '__proto__', target: 'много', stake: null, limitSec: 'нет' }, left: NaN, bets: [null, 5, { name: 'я'.repeat(100), avatar: '🙂'.repeat(20), amount: Infinity }] },
+      { t: 'bet:ok', amount: 'много' }, { t: 'bet:full', left: {} },
+      { t: 'start', challenge: { type: 'constructor' }, bets: 'нет' },
+      { t: 'count', count: 'x', target: null, unit: { a: 1 } },
+      { t: 'fault', text: 'я'.repeat(400) }, { t: 'fault', text: 42 }, { t: 'rejected' },
+      { t: 'end', success: 'да', count: -5, target: 1e99, you: 'нет' },
+      { t: 'void', reason: { x: 1 } },
+    ];
+    for (const m of bad) S = msg(S, m, 1);
+    for (const key of ['left', 'count', 'target']) a.ok(Number.isFinite(S[key]) && S[key] >= 0, `${key} конечное число`);
+    a.ok(S.target <= 1e9, 'огромное число обрезано');
+    const S2 = msg(initialState('h'), { t: 'lobby', challenge: CH, left: 5, bets: [null, 5, { name: 'я'.repeat(100), avatar: '🙂'.repeat(20), amount: Infinity }] });
+    a.eq(S2.bets.length, 1, 'ставки не объекты отброшены');
+    a.eq(Array.from(S2.bets[0].name).length, 24);
+    a.eq(Array.from(S2.bets[0].avatar).length, 6);
+    a.eq(S2.bets[0].amount, 0, 'бесконечная сумма не верится');
+    const fault = msg(msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }), { t: 'fault', text: 'я'.repeat(400) });
+    a.eq(Array.from(fault.feed[0].text).length, 140);
+    a.eq(describeChallenge({ type: '__proto__', target: 3 }).label, 'Челлендж');
+    a.eq(describeChallenge({ type: 'constructor' }).emoji, '🎯');
+    a.eq(reduce(S, { type: 'что-то новое' }), S);
+  });
+
+  t.test('friend: контракт экрана: без камеры и моделей, реакции для пальца', (a) => {
+    a.eq(friend.model, 'none');
+    a.eq(typeof friend.enter, 'function');
+    a.eq(typeof friend.exit, 'function');
+    a.eq(typeof friend.frame, 'function');
+    a.eq(typeof friend.draw, 'function');
+    a.ok(REACTIONS.length >= 2 && REACTIONS.length <= 3, '2-3 реакции');
+    for (const r of REACTIONS) a.ok(r.label.length <= 10 && r.text.length <= 20, `короткая реакция: ${r.text}`);
+    a.deep(initialState('id').hostId, 'id');
+  });
+
+  t.test('friend: заглушка вместо peer.js играет круг раунда теми же сообщениями', (a) => {
+    const out = [];
+    const ctx = { bus: { emit: (type, p) => out.push([type, p]) }, timeout: (fn) => fn(), debug: { log() {} } };
+    const g = createStubGuest(ctx);
+    let S = initialState('demo');
+    const pump = () => {
+      for (const [type, p] of out.splice(0)) {
+        if (type === 'guest:status') S = reduce(S, { type: 'status', status: p.status });
+        if (type === 'guest:msg') S = reduce(S, { type: 'msg', msg: p.msg, now: 0 });
+        if (type === 'guest:wallet') S = reduce(S, { type: 'wallet', balance: p.balance, delta: p.delta });
+      }
+    };
+    g.connect();
+    pump();
+    a.eq(S.phase, 'lobby');
+    a.eq(S.balance, 100);
+    a.eq(S.challenge.type, 'squat');
+    g.bet(20);
+    pump();
+    a.eq(S.myBet, null, 'больше остатка: пул полон');
+    a.ok(S.notice.text.startsWith('Осталось только 5'), S.notice?.text);
+    g.bet(5);
+    pump();
+    a.eq(S.myBet, 5);
+    g.step(); // старт: ставка списана
+    pump();
+    a.eq(S.phase, 'live');
+    a.eq(S.balance, 95);
+    g.step(); // счёт
+    g.step(); // ошибка
+    g.step(); // счёт
+    g.step(); // не засчитан
+    pump();
+    a.ok(S.count > 0 && S.feed.length === 2, `счёт ${S.count}, ошибок ${S.feed.length}`);
+    g.step(); // итог: игрок не справился, друг выиграл
+    pump();
+    a.eq(S.phase, 'result');
+    a.eq(S.result.delta, 4.5);
+    a.eq(S.balance, 104.5);
+    g.step(); // новый раунд: другой челлендж, ставка сброшена
+    pump();
+    a.eq(S.phase, 'lobby');
+    a.eq(S.myBet, null);
+    a.eq(S.challenge.type, 'pushup');
+    for (let i = 0; i < 3; i++) g.step(); // старт без ставки, счёт, итог: игрок справился
+    pump();
+    a.eq(S.phase, 'result');
+    a.eq(resultView(S).showDelta, false);
+    g.step(); // отмена
+    pump();
+    a.eq(S.phase, 'void');
+    a.eq(typeof g.stop, 'function');
+  });
+
+  t.test('friend: на каждый ответ guest.bet свой понятный текст', (a) => {
+    const S = { ...lobbyOf(initialState('h'), { left: 20 }), balance: 100 };
+    const asked = reduce(S, { type: 'bet:sent', amount: 10 });
+    a.eq(reduce(asked, { type: 'bet:result', result: 'sent' }), asked, 'sent: ждём ответ хоста');
+    const text = (result, extra = {}) => {
+      const next = reduce(asked, { type: 'bet:result', result, ...extra });
+      a.eq(next.pending, null, `${result}: ставка не в пути`);
+      a.eq(next.notice.tone, 'warn');
+      return next.notice.text;
+    };
+    a.eq(text('closed'), 'Ставки уже закрыты');
+    a.eq(text('repeat'), 'Ты уже поставил на этот раунд');
+    a.eq(text('poor'), 'Не хватает кредитов');
+    a.eq(text('offline'), 'Нет связи с игроком, попробуй ещё раз');
+    a.eq(text('invalid'), 'Такую ставку сделать нельзя');
+    a.eq(text(undefined), 'Нет связи с игроком, попробуй ещё раз', 'непонятный ответ: как будто связи нет');
+    a.eq(text('constructor'), 'Нет связи с игроком, попробуй ещё раз', 'чужие ключи словаря не берём');
+    const repeat = reduce(asked, { type: 'bet:result', result: 'repeat', myBet: 10 });
+    a.eq(repeat.myBet, 10, 'ставка уже есть у хоста: показываем её');
+    a.eq(reduce(asked, { type: 'bet:result', result: 'repeat', myBet: 'много' }).myBet, null);
+  });
+
+  t.test('friend: своя ставка из you.amount в лобби и старте', (a) => {
+    const withYou = lobbyOf(initialState('h'), { you: { amount: 5 } });
+    a.eq(withYou.myBet, 5);
+    a.deep(lobbyView(withYou).notice, { tone: 'ok', text: 'Ставка принята' });
+    a.deep(betOptions(withYou).map((x) => x.selected), [true, false, false]);
+    a.eq(lobbyOf(withYou, { you: { amount: 0 } }).myBet, null, 'you.amount 0: без ставки');
+    a.eq(lobbyOf(withYou).myBet, 5, 'you нет в сообщении: не забываем');
+    a.eq(lobbyOf(withYou, { you: 'нет' }).myBet, 5, 'you не объект: не верим');
+    const started = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH, you: { amount: 10 } }, 0);
+    a.eq(started.myBet, 10);
+    a.eq(msg(started, { t: 'start', challenge: CH, you: { amount: -3 } }, 0).myBet, null);
+  });
+
+  t.test('friend: заглушка отвечает на ставку как настоящий гость', (a) => {
+    const out = [];
+    const ctx = { bus: { emit: (type, p) => out.push([type, p]) }, timeout: (fn) => fn(), debug: { log() {} } };
+    const g = createStubGuest(ctx);
+    a.eq(g.bet(5), 'offline', 'раунда ещё нет');
+    g.connect();
+    g.money = 3;
+    a.eq(g.bet(5), 'poor');
+    g.money = 100;
+    a.eq(g.bet(5), 'sent');
+    a.eq(g.myBet, 5);
+    a.eq(g.bet(5), 'repeat');
+    g.step();
+    a.eq(g.bet(5), 'closed', 'после старта ставки закрыты');
+    const lobbyMsg = out.map(([, p]) => p?.msg).filter((m) => m?.t === 'lobby').pop();
+    a.deep(lobbyMsg.you, { amount: 5 });
+    a.eq(out.map(([, p]) => p?.msg).filter((m) => m?.t === 'start').pop().you.amount, 5);
+  });
+
+  t.test('friend: ставке от гостя верим больше, чем полю сообщения; поток видео может кончиться', (a) => {
+    const lobby = { t: 'lobby', challenge: CH, left: 5, bets: [HOST_BET] };
+    const withGuest = (S, m, myBet) => reduce(S, { type: 'msg', msg: m, now: 0, myBet });
+    a.eq(withGuest(initialState('h'), { ...lobby, you: { amount: 5 } }, 10).myBet, 10, 'гость посчитал по списку ставок');
+    a.eq(withGuest(initialState('h'), { ...lobby, you: { amount: 5 } }, 0).myBet, null, 'у гостя ставки нет');
+    a.eq(withGuest(initialState('h'), { ...lobby, you: { amount: 5 } }, undefined).myBet, 5, 'гостя нет: берём you');
+    a.eq(withGuest(initialState('h'), { t: 'count', count: 1, target: 15 }, 10).myBet, null, 'на count поле гостя не смотрим');
+    const started = withGuest(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 5);
+    a.eq(started.myBet, 5);
+    let S = reduce(started, { type: 'stream' });
+    a.eq(S.hasVideo, true);
+    S = reduce(S, { type: 'stream:end' });
+    a.eq(S.hasVideo, false, 'звонок кончился: снова «жду видео»');
+    a.eq(reduce(S, { type: 'stream:end' }), S);
+    // число в поле t это не вид сообщения
+    a.eq(reduce(initialState('h'), { type: 'msg', msg: { t: 1699999999, type: 'lobby', challenge: CH, left: 5 }, now: 0 }).phase, 'lobby');
+    a.eq(reduce(initialState('h'), { type: 'msg', msg: { t: 1699999999, challenge: CH, left: 5 }, now: 0 }).phase, 'connecting');
   });
 };
