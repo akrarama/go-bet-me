@@ -162,7 +162,7 @@ function checkPosition(r, frame) {
   if (key !== r.checksKey) {
     r.checksKey = key;
     r.els.checks.innerHTML = checks
-      .map((c) => `<li class="check${c.ok ? ' is-ok' : ''}"><span class="check__mark" aria-hidden="true"></span>${esc(c.text)}</li>`)
+      .map((c) => `<li class="position__check${c.ok ? ' is-ok' : ''}"><span class="position__mark" aria-hidden="true"></span>${esc(c.text)}</li>`)
       .join('');
   }
   if (res?.ok) {
