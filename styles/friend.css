@@ -115,9 +115,14 @@
 .friend__video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .friend__video[data-fit="contain"] { object-fit: contain; }
 .friend__novideo {
-  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
-  color: var(--muted); font-weight: 700;
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 0 calc(var(--gutter) + 8px); text-align: center; color: var(--muted);
 }
+.friend__novideo .spinner { margin-bottom: 6px; }
+.friend__nv-icon { font-size: 40px; line-height: 1; }
+.friend__nv-title { font-size: 18px; font-weight: 800; color: var(--text); }
+.friend__nv-text { max-width: 30ch; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.friend__nv-text:empty { display: none; }
 .friend__hud { position: absolute; inset: 0; pointer-events: none; }
 .friend__hud::before {
   content: ''; position: absolute; inset: 0;
@@ -132,6 +137,8 @@
 }
 .friend__timer { gap: 10px; transition: color 0.3s; }
 .friend__timer.is-low { color: var(--danger); }
+.friend__timer.is-frozen { color: var(--muted); }
+.friend__timer.is-frozen .friend__dot { animation: none; background: var(--faint); box-shadow: none; }
 .friend__dot {
   width: 10px; height: 10px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 10px var(--danger-glow);
   animation: friend-live 1.6s ease-in-out infinite;
@@ -153,6 +160,14 @@
 @keyframes friend-fault-in { from { opacity: 0; transform: translateY(-10px) scale(0.94); } }
 
 .friend__counter { position: absolute; left: var(--gutter); bottom: calc(var(--safe-b) + 108px); }
+
+/* Игрок пропал посреди эфира: карточка поверх видео, тапы по реакциям не проходят */
+.friend__lost {
+  position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
+  padding: var(--gutter); background: rgba(0, 0, 0, 0.6); pointer-events: auto;
+}
+.friend__lost-card { margin: 0; width: min(420px, 100%); }
+.friend__lost-card .friend__nv-icon { margin-bottom: 2px; }
 
 .friend__reactions {
   position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b) + 20px);
@@ -217,6 +232,12 @@
   .friend__reactions { left: auto; right: var(--gutter); padding: 0; gap: 12px; }
   .friend__react { flex: none; width: 128px; }
 }
+
+/* Слабые телефоны: размытие фона под чипами поверх идущего видео дорогое, а фон и так почти непрозрачный */
+.friend__view--live .chip,
+.friend__view--live .friend__fault,
+.friend__view--live .friend__react { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.friend__view--live .chip { background: var(--surface-strong); }
 
 @media (prefers-reduced-motion: reduce) {
   .friend__dot, .friend__dots i, .friend__bet.is-pending { animation: none; }

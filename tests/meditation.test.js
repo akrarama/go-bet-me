@@ -1,11 +1,11 @@
 // Тесты блока 4 (Медитация): глаза, неподвижность, лица, жизни, таймер. Синтетические кадры, без камеры.
 
-import { MEDITATION as M } from '../src/config.js';
+import { MEDITATION as M, MONEY } from '../src/config.js';
 import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW } from '../src/vision/face.js';
 import { createController } from '../src/exercises/meditation.js';
 import friend, {
   REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural,
-  reduce, resultView, timerView, voidView,
+  reduce, resultView, timerView, videoView, voidView, lostView,
 } from '../src/screens/friend.js';
 
 const W = 1280;
@@ -915,5 +915,82 @@ export default (t) => {
     // число в поле t это не вид сообщения
     a.eq(reduce(initialState('h'), { type: 'msg', msg: { t: 1699999999, type: 'lobby', challenge: CH, left: 5 }, now: 0 }).phase, 'lobby');
     a.eq(reduce(initialState('h'), { type: 'msg', msg: { t: 1699999999, challenge: CH, left: 5 }, now: 0 }).phase, 'connecting');
+  });
+
+  t.test('friend: пока видео нет: ждём, потом «не приходит», счёт идёт; пришло: заглушка уходит', (a) => {
+    let S = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0);
+    a.deep(videoView(S), { show: true, busy: true, title: 'Ждём видео игрока', text: '' });
+    S = reduce(S, { type: 'video:late' });
+    const late = videoView(S);
+    a.eq(late.busy, false);
+    a.eq(late.title, 'Видео не приходит');
+    a.ok(late.text.includes('Счёт и ошибки идут и без видео'), late.text);
+    S = msg(S, { t: 'count', count: 4, target: 15 });
+    a.eq(S.count, 4, 'без видео счёт идёт');
+    S = reduce(S, { type: 'stream' });
+    a.eq(videoView(S).show, false);
+    a.eq(S.videoLate, false, 'видео пришло: «не приходит» снято');
+    // поздний таймер после прихода видео или вне эфира ничего не меняет
+    a.eq(reduce(S, { type: 'video:late' }), S);
+    a.eq(reduce(lobbyOf(initialState('h')), { type: 'video:late' }).videoLate, false);
+    // видео шло и прервалось посреди эфира
+    const cut = reduce(S, { type: 'stream:end' });
+    a.deep([videoView(cut).title, videoView(cut).busy], ['Видео прервалось', false]);
+    a.eq(reduce(cut, { type: 'video:late' }), cut, 'прервалось важнее, чем «не пришло»');
+    // следующий раунд начинается с чистого ожидания
+    const next = msg(cut, { t: 'start', challenge: { ...CH, id: 'c2' } }, 5);
+    a.eq(videoView(next).title, 'Ждём видео игрока');
+    // звонок кончился вне эфира (после финиша): в лобби никакого «прервалось»
+    a.eq(reduce(lobbyOf(initialState('h')), { type: 'stream:end' }).videoEnded, false);
+  });
+
+  t.test('friend: игрок пропал посреди эфира: таймер стоит, через 4 с карточка, через 30 с «обнови страницу»', (a) => {
+    let S = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 1000);
+    a.eq(lostView(S, 20000), null, 'связь есть: карточки нет');
+    S = reduce(S, { type: 'status', status: 'closed', now: 11000 });
+    a.eq(S.link, 'lost');
+    a.eq(S.phase, 'live', 'эфир не пропадает: только плашка и карточка');
+    a.eq(S.lostAt, 11000);
+    a.eq(lostView(S, 13000), null, 'первые 4 с только плашка');
+    const wait = lostView(S, 16000);
+    a.eq(wait.title, 'Связь с игроком пропала');
+    a.eq(wait.reload, false);
+    a.ok(wait.text.includes('раунд не продолжится'), wait.text);
+    const gone = lostView(S, 45000);
+    a.eq(gone.title, 'Игрок не вернулся');
+    a.eq(gone.reload, true);
+    a.ok(gone.text.includes('ставка вернётся'), gone.text);
+    // таймер замер на моменте пропажи: 10 с из 90 прошло, остаётся 01:20
+    a.eq(timerView(S, 11000).text, '01:20');
+    a.eq(timerView(S, 60000).text, '01:20');
+    // повторный статус не сдвигает момент пропажи
+    a.eq(reduce(S, { type: 'status', status: 'connecting', now: 20000 }).lostAt, 11000);
+    // связь вернулась: таймер снова идёт по настоящему времени, карточка уходит
+    const back = reduce(S, { type: 'status', status: 'open', now: 30000 });
+    a.eq(back.lostAt, null);
+    a.eq(lostView(back, 31000), null);
+    a.eq(timerView(back, 31000).text, '01:00');
+    // вне эфира момент пропажи не ведём
+    a.eq(reduce(lobbyOf(initialState('h')), { type: 'status', status: 'closed', now: 5 }).lostAt, null);
+    a.eq(lostView({ ...S, phase: 'result' }, 45000), null);
+  });
+
+  t.test('friend: понятный текст ошибки подключения по причине от peer.js', (a) => {
+    const text = (error, kind = 'error') => connectView(reduce(initialState('h'), { type: 'status', status: kind, error, now: 0 })).text;
+    a.eq(text('peer-unavailable'), 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую');
+    a.ok(text('timeout').startsWith('Игрок не отвечает. Проверь интернет'), text('timeout'));
+    a.ok(text('lib').startsWith('Не загрузилась связь'), text('lib'));
+    a.ok(text('socket-error').startsWith('Нет связи с сервером'), text('socket-error'));
+    a.ok(text('network').startsWith('Нет связи с сервером'), text('network'));
+    a.ok(text('browser-incompatible').includes('Chrome или Safari'), text('browser-incompatible'));
+    a.eq(text('что-то новое'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'неизвестная причина: общий текст');
+    a.eq(text('constructor'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'чужие ключи словаря не берём');
+    a.eq(text(undefined, 'closed'), 'Связь оборвалась. Проверь интернет и попробуй ещё раз');
+    a.eq(text({ x: 1 }), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'причина не строка');
+  });
+
+  t.test('friend: кнопки ставки те же, что принимает хост (MONEY.friend.bets)', (a) => {
+    const S = { ...lobbyOf(initialState('h'), { left: 100 }), balance: 1000 };
+    a.deep(betOptions(S).map((x) => x.amount), MONEY.friend.bets);
   });
 };

@@ -8,7 +8,7 @@
 // Состояние чистое (reduce, betOptions, lobbyView, resultView ...): тесты идут в jsc, DOM только в enter и ниже.
 // Без peer.js в ?debug=1 работает заглушка: клавиша f следующий шаг раунда, g ошибка игрока.
 
-import { CHALLENGES, STAKES } from '../config.js';
+import { CHALLENGES, MONEY, STAKES } from '../config.js';
 import { esc, formatTime } from '../ui.js';
 import { sound } from '../sound.js';
 
@@ -18,7 +18,11 @@ const SLOW_MS = 10000; // подключение тянется: подсказ�
 const GIVEUP_MS = 30000; // не подключились: ошибка и кнопка «Повторить»
 const BET_WAIT_MS = 6000; // на ставку нет ответа: можно ставить снова
 const REACT_GAP_MS = 1200; // реакция не чаще
+const VIDEO_LATE_MS = 10000; // видео не пришло за это время после старта: объясняем, счёт идёт и без него
+const LOST_SHOW_MS = 4000; // связь с игроком пропала посреди эфира: столько только плашка, потом карточка
+const LOST_GIVEUP_MS = 30000; // игрок так и не вернулся: предлагаем обновить страницу (ставка вернётся)
 const FEE = 0.1; // комиссия для заглушки: как APP_FEE в money.js
+const BETS = MONEY?.friend?.bets ?? STAKES; // те же суммы принимает хост
 // Что ответил guest.bet(): 'sent' ждём ответа хоста, остальное сразу объясняем словами
 const BET_ANSWERS = {
   closed: 'Ставки уже закрыты',
@@ -125,6 +129,10 @@ export function initialState(hostId = '') {
     result: null, // { success, count, target, amount, delta }
     voidReason: null,
     hasVideo: false,
+    videoLate: false, // видео не пришло за VIDEO_LATE_MS
+    videoEnded: false, // видео шло и прервалось посреди эфира
+    lostAt: null, // связь пропала посреди эфира: когда (мс экрана), пока не вернулась
+    errorCode: null, // почему не подключились: timeout, peer-unavailable, lib ...
   };
 }
 
@@ -137,13 +145,15 @@ export function linkOf(status) {
   return 'connecting';
 }
 
-function onStatus(S, status) {
+function onStatus(S, status, now, error) {
   const link = linkOf(status);
-  if (link === 'open') return { ...S, link: 'open', slow: false };
-  if (link === 'connecting') return { ...S, link: 'connecting', phase: S.phase === 'error' ? 'connecting' : S.phase };
+  if (link === 'open') return { ...S, link: 'open', slow: false, lostAt: null };
+  // связь пропала посреди эфира: запоминаем когда, чтобы остановить таймер и позже показать карточку
+  const lostAt = S.phase === 'live' ? (S.lostAt ?? now) : S.lostAt;
+  if (link === 'connecting') return { ...S, link: 'connecting', phase: S.phase === 'error' ? 'connecting' : S.phase, lostAt };
   // связь оборвалась: пока не было условий челленджа это ошибка, потом только плашка поверх экрана
   const early = S.phase === 'connecting' || S.phase === 'error';
-  return { ...S, link: 'lost', phase: early ? 'error' : S.phase, errorKind: link };
+  return { ...S, link: 'lost', phase: early ? 'error' : S.phase, errorKind: link, errorCode: typeof error === 'string' ? clip(error, 40) : S.errorCode, lostAt };
 }
 
 /** Игрок уже в раунде, а мы только подключились: первый счёт или ошибка открывают live. */
@@ -207,6 +217,9 @@ function onMsg(S, msg, now) {
         voidReason: null,
         pending: null,
         notice: null,
+        videoLate: false,
+        videoEnded: false,
+        lostAt: null,
       };
     }
     case 'count': {
@@ -243,7 +256,7 @@ function onMsg(S, msg, now) {
 export function reduce(S, ev) {
   switch (ev.type) {
     case 'status':
-      return onStatus(S, ev.status);
+      return onStatus(S, ev.status, ev.now ?? 0, ev.error);
     case 'msg': {
       const next = onMsg(S, ev.msg, ev.now ?? 0);
       // гость сам считает мою принятую ставку (по списку ставок и you): ему верим больше, чем одному полю сообщения
@@ -251,9 +264,13 @@ export function reduce(S, ev) {
       return known ? { ...next, myBet: ev.myBet > 0 ? num(ev.myBet) : null } : next;
     }
     case 'stream':
-      return S.hasVideo ? S : { ...S, hasVideo: true };
-    case 'stream:end':
-      return S.hasVideo ? { ...S, hasVideo: false } : S;
+      return S.hasVideo && !S.videoLate && !S.videoEnded ? S : { ...S, hasVideo: true, videoLate: false, videoEnded: false };
+    case 'stream:end': {
+      const ended = S.phase === 'live';
+      return !S.hasVideo && S.videoEnded === ended ? S : { ...S, hasVideo: false, videoEnded: ended };
+    }
+    case 'video:late':
+      return S.phase === 'live' && !S.hasVideo && !S.videoEnded ? { ...S, videoLate: true } : S;
     case 'wallet':
       return { ...S, balance: typeof ev.balance === 'number' && Number.isFinite(ev.balance) ? ev.balance : S.balance, walletDelta: num(ev.delta, S.walletDelta) };
     case 'bet:sent':
@@ -281,7 +298,7 @@ export function reduce(S, ev) {
 }
 
 /** Кнопки ставки: что можно нажать с учётом остатка пула, моего баланса и уже сделанной ставки. */
-export function betOptions(S, amounts = STAKES) {
+export function betOptions(S, amounts = BETS) {
   return amounts.map((amount) => {
     const selected = S.myBet === amount;
     let reason = null;
@@ -299,7 +316,7 @@ export function lobbyNotice(S) {
   if (S.myBet != null) return { tone: 'ok', text: 'Ставка принята' };
   if (S.challenge) {
     if (S.left <= 0) return { tone: 'warn', text: 'Пул уже полон, можно только смотреть' };
-    if (S.balance != null && S.balance < Math.min(...STAKES)) return { tone: 'warn', text: 'Не хватает кредитов для ставки' };
+    if (S.balance != null && S.balance < Math.min(...BETS)) return { tone: 'warn', text: 'Не хватает кредитов для ставки' };
   }
   return null;
 }
@@ -320,7 +337,8 @@ export function lobbyView(S) {
 
 /** Таймер live: с лимитом считает назад, без лимита (медитация) вперёд. now и startedAt в мс. */
 export function timerView(S, now) {
-  const el = S.startedAt ? Math.max(0, (now - S.startedAt) / 1000) : 0;
+  const end = S.lostAt != null ? S.lostAt : now; // связи нет: таймер стоит, чтобы не показывать время, которого не видим
+  const el = S.startedAt ? Math.max(0, (end - S.startedAt) / 1000) : 0;
   const limit = S.challenge?.limitSec;
   if (!limit) return { text: formatTime(el), low: false };
   const left = limit - el;
@@ -360,15 +378,47 @@ export function voidView(S) {
   };
 }
 
+/** Что показывать вместо видео игрока: ждём, не пришло, прервалось. show: false, когда видео идёт. */
+export function videoView(S) {
+  if (S.hasVideo) return { show: false };
+  if (S.videoEnded) return { show: true, busy: false, title: 'Видео прервалось', text: 'Счёт и ошибки идут дальше' };
+  if (S.videoLate) return { show: true, busy: false, title: 'Видео не приходит', text: 'Слабая связь у тебя или у игрока. Счёт и ошибки идут и без видео' };
+  return { show: true, busy: true, title: 'Ждём видео игрока', text: '' };
+}
+
+/** Игрок пропал посреди эфира: сначала только плашка, потом карточка, потом предложение обновить страницу. */
+export function lostView(S, now) {
+  if (S.phase !== 'live' || S.lostAt == null) return null;
+  const gone = now - S.lostAt;
+  if (gone < LOST_SHOW_MS) return null;
+  if (gone < LOST_GIVEUP_MS) {
+    return { title: 'Связь с игроком пропала', text: 'Пробуем вернуться. Если игрок закрыл страницу, раунд не продолжится', reload: false };
+  }
+  return { title: 'Игрок не вернулся', text: 'Обнови страницу: ставка вернётся, и можно зайти снова', reload: true };
+}
+
+// Причина от peer.js (guest:status error) → что сказать другу. Типы PeerJS: peer-unavailable, network, socket-error ...
+const ERROR_TEXTS = {
+  'peer-unavailable': 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую',
+  timeout: 'Игрок не отвечает. Проверь интернет и ссылку, потом попробуй ещё раз',
+  lib: 'Не загрузилась связь с игроком. Проверь интернет и попробуй ещё раз',
+  network: 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
+  'socket-error': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
+  'socket-closed': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
+  'server-error': 'Сервер связи сейчас не отвечает. Попробуй ещё раз чуть позже',
+  'browser-incompatible': 'Этот браузер не умеет видео по ссылке. Открой ссылку в Chrome или Safari',
+};
+
+function errorText(S) {
+  const byCode = own(ERROR_TEXTS, S.errorCode);
+  if (byCode) return byCode;
+  return S.errorKind === 'closed' ? 'Связь оборвалась. Проверь интернет и попробуй ещё раз' : 'Игрок не отвечает. Проверь ссылку или попроси прислать новую';
+}
+
 /** Текст экрана подключения по состоянию. */
 export function connectView(S) {
   if (S.phase === 'error') {
-    return {
-      title: 'Не получилось подключиться',
-      text: S.errorKind === 'closed' ? 'Связь оборвалась. Проверь интернет и попробуй ещё раз' : 'Игрок не отвечает. Проверь ссылку или попроси прислать новую',
-      busy: false,
-      retry: true,
-    };
+    return { title: 'Не получилось подключиться', text: errorText(S), busy: false, retry: true };
   }
   return {
     title: 'Подключаюсь к игроку',
@@ -414,7 +464,7 @@ const skeleton = () => `
         </div>
         <div class="friend__eyebrow">Твоя ставка против</div>
         <div class="friend__bet-row" data-bet-row>
-          ${STAKES.map((a) => `<button class="friend__bet" type="button" data-bet="${a}"><span class="friend__bet-amount">${a}</span><span class="friend__bet-unit">кр.</span></button>`).join('')}
+          ${BETS.map((a) => `<button class="friend__bet" type="button" data-bet="${a}"><span class="friend__bet-amount">${a}</span><span class="friend__bet-unit">кр.</span></button>`).join('')}
         </div>
         <p class="friend__notice" data-notice aria-live="polite" hidden></p>
         <p class="friend__foot" data-foot></p>
@@ -424,7 +474,12 @@ const skeleton = () => `
     <section class="friend__view friend__view--live">
       <div class="friend__video-wrap">
         <video class="friend__video" data-video autoplay playsinline muted></video>
-        <div class="friend__novideo" data-novideo><div class="spinner"></div><span>Жду видео игрока</span></div>
+        <div class="friend__novideo" data-novideo>
+          <div class="spinner" data-nv-busy></div>
+          <div class="friend__nv-icon" data-nv-icon hidden>📡</div>
+          <b class="friend__nv-title" data-nv-title></b>
+          <span class="friend__nv-text" data-nv-text></span>
+        </div>
       </div>
       <div class="friend__hud">
         <div class="friend__top">
@@ -436,6 +491,14 @@ const skeleton = () => `
           <div class="hud__label" data-live-label></div>
           <div class="counter" data-counter><span data-count>0</span><span class="counter__target" data-target></span></div>
           <div class="progress"><div class="progress__bar" data-progress></div></div>
+        </div>
+        <div class="friend__lost" data-lost hidden>
+          <div class="panel friend__card friend__card--center friend__lost-card">
+            <div class="friend__nv-icon">📡</div>
+            <h2 class="h2" data-lost-title></h2>
+            <p class="muted" data-lost-text></p>
+            <button class="friend__btn" type="button" data-reload hidden>Обновить страницу</button>
+          </div>
         </div>
         <div class="friend__reactions" data-reactions>
           ${REACTIONS.map((x, i) => `<button class="friend__react" type="button" data-react="${i}"><span class="friend__react-emoji">${x.emoji}</span><span class="friend__react-label">${esc(x.label)}</span></button>`).join('')}
@@ -479,7 +542,8 @@ function collect(root) {
     meAvatar: q('[data-me-avatar]'), meName: q('[data-me-name]'), meBalance: q('[data-me-balance]'),
     chTitle: q('[data-ch-title]'), facts: q('[data-facts]'), poolText: q('[data-pool-text]'), poolFill: q('[data-pool-fill]'), bets: q('[data-bets]'),
     betRow: q('[data-bet-row]'), notice: q('[data-notice]'), foot: q('[data-foot]'),
-    video: q('[data-video]'), novideo: q('[data-novideo]'),
+    video: q('[data-video]'), novideo: q('[data-novideo]'), nvBusy: q('[data-nv-busy]'), nvIcon: q('[data-nv-icon]'), nvTitle: q('[data-nv-title]'), nvText: q('[data-nv-text]'),
+    lost: q('[data-lost]'), lostTitle: q('[data-lost-title]'), lostText: q('[data-lost-text]'), reload: q('[data-reload]'),
     timer: q('[data-timer]'), timerText: q('[data-timer-text]'), stake: q('[data-stake]'), feed: q('[data-feed]'),
     liveLabel: q('[data-live-label]'), counter: q('[data-counter]'), count: q('[data-count]'), target: q('[data-target]'), progress: q('[data-progress]'),
     reactions: q('[data-reactions]'),
@@ -548,11 +612,25 @@ function syncFeed(r) {
   }
 }
 
+function paintLost(r, now) {
+  const { els } = r;
+  const v = lostView(r.S, now);
+  els.lost.hidden = !v;
+  if (!v) return;
+  els.lostTitle.textContent = v.title;
+  els.lostText.textContent = v.text;
+  els.reload.hidden = !v.reload;
+}
+
+/** Раз в четверть секунды: таймер эфира и карточка «связь пропала» (она появляется по времени, а не по событию). */
 function tickTimer(r) {
   if (!r.els || r.S.phase !== 'live') return;
-  const t = timerView(r.S, performance.now());
+  const now = performance.now();
+  const t = timerView(r.S, now);
   r.els.timerText.textContent = t.text;
   r.els.timer.classList.toggle('is-low', t.low);
+  r.els.timer.classList.toggle('is-frozen', r.S.lostAt != null);
+  paintLost(r, now);
 }
 
 function paintLive(r) {
@@ -569,7 +647,14 @@ function paintLive(r) {
     if (up) bump(els.counter);
   }
   els.stake.textContent = S.myBet != null ? `Ты против: ${kr(S.myBet)}` : 'Смотришь без ставки';
-  els.novideo.hidden = S.hasVideo;
+  const nv = videoView(S);
+  els.novideo.hidden = !nv.show;
+  if (nv.show) {
+    els.nvBusy.hidden = !nv.busy;
+    els.nvIcon.hidden = nv.busy;
+    els.nvTitle.textContent = nv.title;
+    els.nvText.textContent = nv.text;
+  }
   syncFeed(r);
   tickTimer(r);
 }
@@ -614,6 +699,8 @@ function dispatch(r, ev) {
     if (S.phase === 'live') {
       r.shownCount = -1;
       r.els.video.play?.().catch(() => {});
+      const epoch = (r.liveEpoch += 1);
+      r.ctx.timeout(() => r.liveEpoch === epoch && dispatch(r, { type: 'video:late' }), VIDEO_LATE_MS);
     }
     if (S.phase === 'result') {
       const v = resultView(S);
@@ -689,16 +776,26 @@ function wire(r) {
     if (sent) floatEmoji(btn, reaction.emoji);
     ctx.timeout(() => (btn.disabled = false), REACT_GAP_MS);
   });
-  els.retry.addEventListener('click', () => {
-    if (!r.guest) return location.reload();
-    dispatch(r, { type: 'retry' });
-    armTimers(r);
+  els.retry.addEventListener('click', async () => {
+    if (r.retrying) return;
+    r.retrying = true;
     try {
-      r.guest.connect?.();
+      // connect() у настоящего гостя второй раз ничего не делает: старого останавливаем, берём нового
+      const old = r.guest;
+      if (old && old !== r.params.guest) old.stop?.();
+      dispatch(r, { type: 'retry' });
+      armTimers(r);
+      const guest = r.params.guest ?? (await makeGuest(ctx, r.params));
+      if (run !== r) return guest !== r.params.guest ? guest?.stop?.() : undefined;
+      await attach(r, guest);
     } catch (err) {
+      console.warn('[friend] повтор', err);
       dispatch(r, { type: 'status', status: 'error' });
+    } finally {
+      r.retrying = false;
     }
   });
+  els.reload.addEventListener('click', () => location.reload()); // перезагрузка возвращает ставку недоигранного раунда
   els.video.addEventListener('playing', () => dispatch(r, { type: 'stream' }));
   // близкие пропорции видео и экрана: во весь экран (cover), иначе целиком с полями (contain), чтобы не срезать игрока
   const fit = () => {
@@ -709,6 +806,23 @@ function wire(r) {
   };
   els.video.addEventListener('loadedmetadata', fit);
   els.video.addEventListener('resize', fit);
+}
+
+/** Подключить гостя к экрану: подтянуть то, что он уже знает, и начать соединение. */
+async function attach(r, guest) {
+  r.guest = guest;
+  if (!guest) return dispatch(r, { type: 'status', status: 'error' });
+  const balance = guest.balance?.();
+  if (typeof balance === 'number') dispatch(r, { type: 'wallet', balance });
+  if (guest.status) dispatch(r, { type: 'status', status: guest.status, now: performance.now() });
+  if (guest.lobby) dispatch(r, { type: 'msg', msg: guest.lobby, now: performance.now(), myBet: guest.myBet });
+  if (guest.stub) debugKeys(r.ctx.debug);
+  try {
+    await guest.connect?.();
+  } catch (err) {
+    console.warn('[friend] connect', err);
+    dispatch(r, { type: 'status', status: 'error' });
+  }
 }
 
 async function makeGuest(ctx, params) {
@@ -726,13 +840,13 @@ export default {
   model: 'none',
 
   async enter(ctx, params = {}) {
-    const r = (run = { ctx, S: initialState(params.hostId), guest: null, els: null, shownCount: -1, attempt: 0 });
+    const r = (run = { ctx, params, S: initialState(params.hostId), guest: null, els: null, shownCount: -1, attempt: 0, liveEpoch: 0 });
     await ensureStyles();
     if (run !== r) return;
     ctx.root.innerHTML = skeleton();
     r.els = collect(ctx.root);
     wire(r);
-    ctx.on('guest:status', ({ status }) => dispatch(r, { type: 'status', status }));
+    ctx.on('guest:status', ({ status, error }) => dispatch(r, { type: 'status', status, error, now: performance.now() }));
     ctx.on('guest:msg', ({ msg }) => dispatch(r, { type: 'msg', msg, now: performance.now(), myBet: r.guest?.myBet }));
     ctx.on('guest:stream', ({ stream }) => {
       attachStream(r, stream); // «видео идёт» скажет событие playing
@@ -745,19 +859,7 @@ export default {
 
     const guest = await makeGuest(ctx, params);
     if (run !== r) return guest?.stop?.();
-    r.guest = guest;
-    if (!guest) return dispatch(r, { type: 'status', status: 'error' });
-    const balance = guest.balance?.();
-    if (typeof balance === 'number') dispatch(r, { type: 'wallet', balance });
-    if (guest.status) dispatch(r, { type: 'status', status: guest.status });
-    if (guest.lobby) dispatch(r, { type: 'msg', msg: guest.lobby, now: performance.now(), myBet: guest.myBet });
-    if (guest.stub) debugKeys(ctx.debug);
-    try {
-      await guest.connect?.();
-    } catch (err) {
-      console.warn('[friend] connect', err);
-      dispatch(r, { type: 'status', status: 'error' });
-    }
+    await attach(r, guest);
   },
 
   // камеры на этом экране нет, кадров не будет; пустая отрисовка, чтобы поверх ничего не рисовалось
