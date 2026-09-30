@@ -62,7 +62,10 @@ export function createGestureGate(opts = GESTURES) {
     },
 
     update(rawName, score, t) {
-      const raw = rawName && score >= opts.minScore ? rawName : NONE;
+      // уже сработавший (или пришедший с прошлого экрана) жест держим и на просадке уверенности до minScore / 2:
+      // иначе короткий провал уверенности снимал бы latch, и 👍 срабатывал бы снова на следующем экране
+      const keep = done && rawName === cand && score >= opts.minScore / 2;
+      const raw = rawName && (score >= opts.minScore || keep) ? rawName : NONE;
       lastRaw = raw;
       if (raw === cand) {
         seen = t;

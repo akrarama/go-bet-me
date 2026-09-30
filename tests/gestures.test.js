@@ -680,6 +680,20 @@ export default (t) => {
     a.near(back.last.progress, 0.5, 1e-9, 'наведение заново:');
   });
 
+  t.test('удержание: просадка уверенности у сработавшего 👍 не взводит его снова', (a) => {
+    const gate = createGestureGate(G);
+    const fired = [
+      ...show(gate, 'None', 0, 1000),
+      ...show(gate, 'Thumb_Up', 1000, 1800),
+      ...show(gate, 'Thumb_Up', 1800, 2100, G.minScore - 0.05), // рука дрогнула: уверенность просела на 300 мс
+      ...show(gate, 'Thumb_Up', 2100, 5000),
+    ];
+    a.deep(fired, [{ name: 'Thumb_Up', t: 1400 }]);
+    // слабый жест, который ещё не срабатывал, по-прежнему не срабатывает
+    const weak = createGestureGate(G);
+    a.eq(show(weak, 'Thumb_Up', 0, 3000, G.minScore - 0.05).length, 0);
+  });
+
   t.test('проверка вживую: ладонь, поднятая для старта в LOBBY, не выпадает заданием', (a) => {
     const gate = createGestureGate(G);
     a.eq(show(gate, 'Open_Palm', 0, 1000).length, 1, 'в LOBBY ладонь сработала');
