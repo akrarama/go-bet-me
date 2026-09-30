@@ -77,6 +77,74 @@ export function hiddenReason(lm, idx, keys) {
 export const atEdge = (p, margin) => Boolean(p) && (p.x < margin || p.x > 1 - margin || p.y < margin || p.y > 1 - margin);
 
 /**
+ * Видимость тела для упражнений на позу (повторы и планка): какая сторона видна, почему не видно (SEEN_WHY),
+ * подсказка с причиной. def: { sideKeys, visible }; deps: { holds, fire(rule), feedback, armed() }.
+ * armed(): человек уже занял позицию, только тогда «не видно» считается ошибкой (до этого он ещё встаёт в кадр).
+ */
+export function createSight(def, { holds, fire, feedback, armed = () => true }) {
+  let why = 'other'; // причина, по которой тело не видно: ключ SEEN_WHY, по ней текст подсказки
+  let whyNext = null; // новая причина ждёт, пока продержится REPS.fault.minMs (текст не мигает)
+  let whySince = 0;
+  let hadPose = false; // позу хоть раз видели
+  let lastAtEdge = false; // в последний раз какой-то нужный сустав был у края кадра
+  return {
+    /**
+     * Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»).
+     * reason: null, если видно, иначе ключ SEEN_WHY (нет позы: nobody, а если человека видели посреди кадра и модель потеряла его, dark).
+     */
+    look(lm) {
+      const pick = lm ? pickSide(lm, def.sideKeys) : null;
+      if (pick) {
+        // где человека видели в последний раз: у края (ушёл из кадра) или посреди (модель его потеряла: темно, шум)
+        lastAtEdge = def.visible.some((key) => EDGE_KEYS.includes(key) && atEdge(lm[pick.idx[key]], REPS.lostEdgeMargin));
+        hadPose = true;
+      }
+      const reason = pick ? hiddenReason(lm, pick.idx, def.visible) : hadPose && !lastAtEdge ? 'dark' : 'nobody';
+      return { pick, seen: reason == null, reason };
+    },
+
+    /**
+     * Тело не видно: счёт на паузе, подсказка называет причину (SEEN_WHY). Пока подсказки нет, причина берётся сразу;
+     * пока висит, новая причина заменяет текст, только когда держится minMs, и тогда считается ещё одной ошибкой.
+     */
+    watch(seen, reason, t) {
+      const hanging = holds.active(VISIBILITY.code);
+      let switched = false;
+      if (reason != null) {
+        if (!hanging || reason === why) {
+          why = reason;
+          whyNext = null;
+        } else if (reason !== whyNext) {
+          whyNext = reason;
+          whySince = t;
+        } else if (t - whySince >= REPS.fault.minMs) {
+          why = reason;
+          whyNext = null;
+          switched = true;
+        }
+      }
+      const edge = holds.update(VISIBILITY.code, !seen, t);
+      if ((edge === 'on' || switched) && armed()) fire(SEEN_WHY[why]);
+      else if (edge === 'off') feedback?.clear(VISIBILITY.code);
+    },
+
+    /** Подсказка про причину висит. */
+    get active() {
+      return holds.active(VISIBILITY.code);
+    },
+    /** Правило-причина (SEEN_WHY): code, label, hint. */
+    get rule() {
+      return SEEN_WHY[why];
+    },
+    show() {
+      feedback?.hint(SEEN_WHY[why].hint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
+    },
+    /** Текст подсказки для причины reason (галочка «тело в кадре» в ready). */
+    hintFor: (reason) => SEEN_WHY[reason].hint,
+  };
+}
+
+/**
  * Коэффициент EMA для кадра длиной dt мс: alpha на кадр REPS.frameMs, при другой частоте
  * сглаживание по времени то же (на 15 fps кадр весит больше, на 60 fps меньше).
  */
@@ -246,6 +314,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   const { cfg } = def;
   const counter = createCounter({ down: cfg.down, up: cfg.up, armMs: cfg.armMs ?? REPS.armMs });
   const holds = createHolds();
+  const sight = createSight(def, { holds, fire: (rule) => fire(rule), feedback, armed: () => seenTop });
   const faults = new Map(); // code → { code, text, count }
   const rejected = []; // { code, text, at, value? }
   const reps = []; // засчитанные: { min, downMs }
@@ -254,11 +323,6 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   const sm = (key, v) => (smooth[key] = v == null || !Number.isFinite(v) ? null : smooth[key] == null ? v : smooth[key] + k * (v - smooth[key]));
   let attempt = []; // правила формы, сработавшие в текущем повторе, по порядку
   let pending = []; // развороты-ошибки, ждут missDelayMs: { rule, value, reason, t, due }
-  let why = 'other'; // причина, по которой тело не видно: ключ SEEN_WHY, по ней текст подсказки
-  let whyNext = null; // новая причина ждёт, пока продержится REPS.fault.minMs (текст не мигает)
-  let whySince = 0;
-  let hadPose = false; // позу хоть раз видели
-  let lastAtEdge = false; // в последний раз какой-то нужный сустав был у края кадра
   let gateHint = null;
   let gateFrames = 0;
   let last = null; // последний кадр с видимым телом: { lm, idx, side, m }
@@ -311,32 +375,6 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     else if (edge === 'off') feedback?.clear(rule.code);
   }
 
-  /**
-   * Тело не видно: счёт на паузе, подсказка называет причину (SEEN_WHY). Пока подсказки нет, причина берётся сразу;
-   * пока висит, новая причина заменяет текст, только когда держится minMs, и тогда считается ещё одной ошибкой.
-   * «Не видно» до первой стойки (человек ещё занимает позицию) в ошибки не пишется.
-   */
-  function watchSeen(seen, reason, t) {
-    const hanging = holds.active(VISIBILITY.code);
-    let switched = false;
-    if (reason != null) {
-      if (!hanging || reason === why) {
-        why = reason;
-        whyNext = null;
-      } else if (reason !== whyNext) {
-        whyNext = reason;
-        whySince = t;
-      } else if (t - whySince >= REPS.fault.minMs) {
-        why = reason;
-        whyNext = null;
-        switched = true;
-      }
-    }
-    const edge = holds.update(VISIBILITY.code, !seen, t);
-    if ((edge === 'on' || switched) && seenTop) fire(SEEN_WHY[why]);
-    else if (edge === 'off') feedback?.clear(VISIBILITY.code);
-  }
-
   /** Полуповтор или мелкий присед: ошибка, если за missDelayMs поза не сломалась (не было прыжка). */
   function commit(t) {
     while (pending.length && pending[0].due <= t) {
@@ -385,21 +423,6 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     }
   }
 
-  /**
-   * Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»).
-   * reason: null, если видно, иначе ключ SEEN_WHY (нет позы: nobody, а если человека видели посреди кадра и модель потеряла его, dark).
-   */
-  function look(lm) {
-    const pick = lm ? pickSide(lm, def.sideKeys) : null;
-    if (pick) {
-      // где человека видели в последний раз: у края (ушёл из кадра) или посреди (модель его потеряла: темно, шум)
-      lastAtEdge = def.visible.some((key) => EDGE_KEYS.includes(key) && atEdge(lm[pick.idx[key]], REPS.lostEdgeMargin));
-      hadPose = true;
-    }
-    const reason = pick ? hiddenReason(lm, pick.idx, def.visible) : hadPose && !lastAtEdge ? 'dark' : 'nobody';
-    return { pick, seen: reason == null, reason };
-  }
-
   const aspectOf = (frame) => (frame.width > 0 && frame.height > 0 ? frame.width / frame.height : 1);
 
   function step(frame, t) {
@@ -407,8 +430,8 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     lastT = t;
     const lm = frame.pose?.landmarks ?? null;
     const aspect = aspectOf(frame);
-    const { pick, seen, reason } = look(lm);
-    watchSeen(seen, reason, t);
+    const { pick, seen, reason } = sight.look(lm);
+    sight.watch(seen, reason, t);
     if (!seen) return; // счёт на паузе
 
     const m = def.measure({ lm, idx: pick.idx, aspect, sm, cfg, t });
@@ -444,8 +467,8 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   /** Подсказка по кадру: старшая из активных правил (разовые разводит feedback по приоритету). */
   function present() {
-    if (holds.active(VISIBILITY.code)) {
-      feedback?.hint(SEEN_WHY[why].hint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
+    if (sight.active) {
+      sight.show();
       return;
     }
     if (holds.active(GATE) && gateHint) {
@@ -464,7 +487,7 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
     debug.set('угол', counter.angle == null ? '·' : `${Math.round(counter.angle)}° ${state}`);
     debug.set('сторона', last?.side ?? '·');
     debug.set('поза', gateFrames ? `не для счёта: ${gateHint?.hint}` : 'ок');
-    debug.set('видимость', holds.active(VISIBILITY.code) ? SEEN_WHY[why].label : 'ок');
+    debug.set('видимость', sight.active ? sight.rule.label : 'ок');
     debug.set('метрики', Object.entries(m).filter(([key]) => key !== 'angle').map(([key, v]) => `${key} ${num(v)}`).join(', '));
     debug.set('повтор', attempt.length ? `ошибка: ${attempt.map((r) => r.code).join(', ')}` : 'чисто');
   }
@@ -505,10 +528,10 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
       k = alphaFor(lastT == null ? Infinity : t - lastT);
       lastT = t;
       const lm = frame.pose?.landmarks ?? null;
-      const { pick, seen, reason } = look(lm);
+      const { pick, seen, reason } = sight.look(lm);
       const m = seen ? def.measure({ lm, idx: pick.idx, aspect: aspectOf(frame), sm, cfg, t }) : null;
       const checks = [
-        { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: SEEN_WHY[reason].hint }) },
+        { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: sight.hintFor(reason) }) },
         ...(def.checks ?? []).map(({ id, text, hint, test }) => {
           const ok = m != null && Boolean(test(m, cfg));
           return m != null && !ok && hint ? { id, text, ok, hint } : { id, text, ok };
@@ -569,7 +592,7 @@ const TONE = {
 const rgba = ([r, g, b], a) => `rgba(${r}, ${g}, ${b}, ${a})`;
 const FLASH_MS = 650;
 
-function drawAngle(draw, pa, pb, pc, value, tone, flash, now) {
+export function drawAngle(draw, pa, pb, pc, value, tone, flash, now) {
   const g = draw.ctx;
   const A = draw.project(pa);
   const B = draw.project(pb);

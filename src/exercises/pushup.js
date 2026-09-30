@@ -67,7 +67,7 @@ export const GATES = {
  * Положение до старта («Встань в позицию»): то же условие, что пропускает кадр в счёт (gate ниже).
  * Тело в кадре добавляет сам движок (reps.js ready).
  */
-const isPlank = (m, cfg) => m.tilt != null && m.tilt < cfg.plankMaxTilt && m.handsDown;
+export const isPlank = (m, cfg) => m.tilt != null && m.tilt < cfg.plankMaxTilt && m.handsDown;
 export const CHECKS = [{ id: 'plank', text: 'Упор лёжа', hint: GATES.plank.hint, test: isPlank }];
 
 /** Метрики кадра (сторона idx уже выбрана и видна). */
