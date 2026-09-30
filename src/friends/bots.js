@@ -190,8 +190,8 @@ const THEMES = [
   ['eyes', /глаз|eye/],
   ['head', /голов|head/],
   ['tempo', /быстр|темп|tempo/],
-  ['floor', /на полу|knees?_?floor|floor_?knee/], // планка: «Колени на полу…» (раньше 'knees', те подколы про носки)
-  ['exitPlank', /упор лёжа|вышел из планки|plank_?(lost|out|exit|off)|no_?plank/], // планка: «Прими упор лёжа, боком к камере»
+  ['floor', /на полу|plank_?knees|knees?_?floor|floor_?knee/], // планка: «Колени на полу…» (раньше 'knees', те подколы про носки)
+  ['exitPlank', /упор лёжа|вышел из планки|plank_?(lost|left|out|exit|off)|no_?plank/], // планка: «Прими упор лёжа, боком к камере»
   ['lower', /опуска|half_down/],
   ['straighten', /выпрям|встань до конца|не встал|half_up|рук/],
   ['depth', /глубин|присядь ниже|shallow/],

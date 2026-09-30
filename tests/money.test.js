@@ -691,6 +691,25 @@ function botsTests(t) {
     a.ok(FAULT_LINES.floor.length >= 3 && FAULT_LINES.exitPlank.length >= 3);
   });
 
+  t.test('боты: настоящие сообщения планки из plank.js и pushup.js попадают в свои темы', (a) => {
+    // коды и тексты как их шлёт блок упражнений (fault: code, text = hint, label)
+    const real = [
+      [{ code: 'hip_sag', text: 'Таз провисает, напряги живот, выровняй тело', label: 'таз провис' }, 'hips'],
+      [{ code: 'hip_pike', text: 'Таз задран вверх, опусти таз в линию с плечами', label: 'таз задран' }, 'hips'],
+      [{ code: 'plank_knees', text: 'Колени на полу: подними их, ноги прямые', label: 'колени на полу' }, 'floor'],
+      [{ code: 'plank_left', text: 'Прими упор лёжа, боком к камере', label: 'вышел из планки' }, 'exitPlank'],
+      [{ code: 'visibility_legs', text: 'Не видно ног: отойди дальше или поставь камеру ниже', label: 'не видно ног' }, 'body'],
+      [{ code: 'visibility_arms', text: 'Не видно рук: поставь камеру сбоку', label: 'не видно рук' }, 'body'],
+      [{ code: 'visibility_dark', text: 'Плохо видно: добавь света или не стой спиной к окну', label: 'плохо видно' }, 'body'],
+    ];
+    for (const [payload, theme] of real) a.eq(faultTheme(payload, 'plank'), theme, payload.code);
+    // если тексты поменяются, коды всё равно ведут в ту же тему
+    a.eq(faultTheme({ code: 'plank_knees', text: '' }, 'plank'), 'floor');
+    a.eq(faultTheme({ code: 'plank_left', text: '' }, 'plank'), 'exitPlank');
+    a.eq(faultTheme({ code: 'plank_left', text: '' }, 'pushup'), null, 'у отжиманий такого подкола нет');
+    for (const theme of new Set(real.map(([, th]) => th))) a.ok(FAULT_LINES[theme]?.length >= 3, `реплики темы ${theme}`);
+  });
+
   t.test('боты: подколы за ошибки планки: таз, колени на полу, вышел из планки', (a) => {
     a.eq(faultTheme({ code: 'plank_hip_sag', text: 'Таз провисает, напряги живот, выровняй тело' }, 'plank'), 'hips');
     a.eq(faultTheme({ code: 'plank_hip_high', text: 'Таз задран вверх, опусти таз в линию с плечами' }, 'plank'), 'hips');
