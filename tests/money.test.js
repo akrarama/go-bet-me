@@ -211,7 +211,7 @@ function moneyTests(t) {
 
 // ─── Кошелёк (src/wallet.js) ─────────────────────────────────────
 
-import { createWallet, badgeOf } from '../src/wallet.js';
+import { createWallet, badgeOf, readState } from '../src/wallet.js';
 
 /** Память вместо localStorage. fail: запись бросает ошибку, как в приватном режиме. */
 function memory({ fail = false } = {}) {
@@ -613,6 +613,141 @@ function walletTests(t) {
   });
 }
 
+// ─── Старые форматы localStorage: каждый открывается без ошибок и без потери баланса ───
+const OLD_BOTS = () => [
+  { id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true, female: false },
+  { id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5, bot: true, female: true },
+];
+const T0 = 1759190700000; // 30.09 00:05, первая версия кошелька
+/** Раунд так, как его писала первая версия (503191c) и версия с починкой финиша (5108a12): без requested, left и tab. */
+const oldRound = (over = {}) => ({
+  id: 'r-old', kind: 'round', challengeId: 'c-old', type: 'squat', target: 10, stake: 10, bets: OLD_BOTS(),
+  status: 'held', success: null, reason: null, startedAt: T0 + 60000, balanceBefore: 100, balanceAfter: 90, ...over,
+});
+const stored = (cents, history) => JSON.stringify({ v: 1, cents, history: [{ id: 'p-old', kind: 'profile', at: T0, balanceAfter: 100 }, ...history] });
+const storageWith = (text) => {
+  const m = memory();
+  m.setItem('k', text);
+  return m;
+};
+const openWallet = (text) => createWallet({ storage: storageWith(text), key: 'k' });
+
+function formatTests(t) {
+  t.test('старые форматы: закрытые раунды первой версии открываются, баланс на месте', (a) => {
+    const win = settle({ stake: 10, bets: OLD_BOTS(), success: true });
+    const lose = settle({ stake: 10, bets: [], success: false });
+    const text = stored(9900, [
+      oldRound({ id: 'r1', challengeId: 'c1', status: 'settled', success: true, reason: 'target', count: 10, durationSec: 41.2, balanceAfter: 109, settlement: win, closedAt: T0 + 120000 }),
+      oldRound({ id: 'r2', challengeId: 'c2', bets: [], status: 'settled', success: false, reason: 'time', balanceBefore: 109, balanceAfter: 99, settlement: lose, closedAt: T0 + 240000 }),
+      oldRound({ id: 'r3', challengeId: 'c3', status: 'refunded', reason: 'camera', balanceBefore: 99, balanceAfter: 99, settlement: refundAll({ stake: 10, bets: OLD_BOTS() }), closedAt: T0 + 300000 }),
+      { id: 't1', kind: 'topup', amount: 30, at: T0 + 400000, balanceAfter: 130 },
+    ]);
+    const st = storageWith(text);
+    const w = createWallet({ storage: st, key: 'k' });
+    a.eq(w.balance, 99);
+    a.eq(w.open, null, 'закрытые раунды ничего не открывают');
+    a.eq(w.history.length, 5);
+    a.eq(w.round('c1').settlement.player.delta, 9, 'расчёт старого раунда читается');
+    a.eq(w.round('c3').status, 'refunded');
+    a.eq(w.recover().length, 0, 'восстанавливать нечего');
+    const ch = challenge();
+    w.hold(ch);
+    a.eq(w.balance, 89, 'новый раунд поверх старой истории');
+    w.end(finished(ch, true));
+    w.settle(ch.id);
+    a.eq(w.balance, 108);
+    const saved = JSON.parse(st.getItem('k'));
+    a.eq(saved.v, 1, 'записывается тот же формат');
+    a.eq(saved.cents, 10800);
+    a.deep(saved.history.filter((h) => h.kind === 'round').map((h) => h.id).slice(0, 3), ['r1', 'r2', 'r3'], 'старые раунды на месте');
+    a.eq(saved.history.filter((h) => h.kind === 'round').length, 4);
+    a.eq(createWallet({ storage: st, key: 'k' }).balance, 108, 'и снова открывается без потерь');
+  });
+
+  t.test('старые форматы: раунд не дошёл до конца (held) закрывается возвратом', (a) => {
+    const w = openWallet(stored(9000, [oldRound()]));
+    a.eq(w.balance, 90, 'ставка списана');
+    a.eq(w.open.status, 'held');
+    const done = w.recover();
+    a.eq(done.length, 1);
+    a.eq(done[0].status, 'refunded');
+    a.eq(done[0].reason, 'interrupted');
+    a.eq(done[0].settlement.voided, true);
+    a.eq(w.balance, 100, 'ставка вернулась целиком');
+    a.eq(w.open, null);
+    a.eq(done[0].balanceAfter, 100);
+    a.deep(done[0].settlement.friends.map((f) => f.payout), [5, 5], 'и ставки ботов вернулись бы им');
+  });
+
+  t.test('старые форматы: доигранный, но не рассчитанный раунд (ended) рассчитывается один раз', (a) => {
+    const won = openWallet(stored(9000, [oldRound({ status: 'ended', success: true, reason: 'target', count: 10, durationSec: 30, endedAt: T0 + 90000 })]));
+    a.eq(won.open.status, 'ended');
+    a.eq(won.recover()[0].status, 'settled');
+    a.eq(won.balance, 109, 'выиграл: ставка назад и 9 сверху');
+    a.eq(won.recover().length, 0, 'второй раз не платит');
+    const lost = openWallet(stored(9000, [oldRound({ status: 'ended', success: false, reason: 'time', endedAt: T0 + 90000 })]));
+    lost.recover();
+    a.eq(lost.balance, 90, 'проиграл: ставка ушла');
+  });
+
+  t.test('старые форматы: без полей requested, left и tab всё работает как прежде', (a) => {
+    const w = openWallet(stored(9000, [oldRound()]));
+    a.ok(w.withdraw('c-old', 'bot-anya'), 'снять ставку из старого раунда можно');
+    a.deep(w.round('c-old').left.map((l) => l.id), ['bot-anya']);
+    const fresh = createWallet({ storage: storageWith(stored(9000, [oldRound()])), key: 'k', tab: 'Z' });
+    a.eq(fresh.ownOpen.challengeId, 'c-old', 'раунд без метки вкладки считается своим');
+    a.eq(fresh.recover('x', { skip: (r) => r.tab === 'Z' }).length, 1, 'а не чужим живым');
+  });
+
+  t.test('старые форматы: длинная история усекается, открытый раунд остаётся', (a) => {
+    const many = [];
+    for (let i = 0; i < 40; i++) many.push({ id: `t${i}`, kind: 'topup', amount: 1, at: T0 + i, balanceAfter: 100 });
+    const w = openWallet(stored(9000, [...many, oldRound()]));
+    a.eq(w.balance, 90);
+    w.topUp(); // любое изменение сохраняет и усекает
+    const rounds = w.history.filter((h) => h.kind === 'round');
+    a.eq(rounds.length, 1, 'открытый раунд не потерялся');
+    a.ok(w.history.length <= MONEY.historyMax + 1, `история ${w.history.length}`);
+  });
+
+  t.test('старые форматы: заготовка 29.09 { balance, history } и неполные записи не сбрасывают баланс', (a) => {
+    a.eq(openWallet(JSON.stringify({ balance: 109, history: [] })).balance, 109, 'заготовка: кредиты числом');
+    a.eq(openWallet(JSON.stringify({ balance: 4.5 })).balance, 4.5);
+    a.eq(openWallet(JSON.stringify({ v: 1, cents: 10900 })).balance, 109, 'без истории');
+    a.eq(openWallet(JSON.stringify({ v: 1, cents: '10900', history: [] })).balance, 109, 'кредиты строкой');
+    a.eq(openWallet(JSON.stringify({ v: 1, cents: 10950.4, history: [] })).balance, 109.5, 'дробные сотые округляются');
+    a.eq(openWallet(JSON.stringify({ cents: 12300, history: [] })).balance, 123, 'без версии');
+    a.eq(openWallet(JSON.stringify({ v: 1, cents: -700, history: [] })).balance, -7, 'минус из старой ошибки сохраняется');
+    const broke = openWallet(JSON.stringify({ v: 1, cents: -700, history: [] }));
+    a.ok(!broke.canAfford(5));
+    a.eq(broke.topUp(), 107, 'и пополнение до 100 работает');
+    a.eq(broke.balance, 100);
+  });
+
+  t.test('старые форматы: порченые записи в истории не роняют кошелёк', (a) => {
+    const text = JSON.stringify({ v: 1, cents: 9000, history: [null, 5, 'строка', {}, { kind: 5 }, { kind: 'round', status: 'held', challengeId: 'c-bad', stake: 'десять', bets: null }, { kind: 'topup', amount: 3 }] });
+    const w = openWallet(text);
+    a.eq(w.balance, 90);
+    a.eq(w.history.length, 2, 'остались только записи-объекты с видом');
+    const done = w.recover();
+    a.eq(done.length, 1, 'раунд без ставок и с кривой ставкой закрывается возвратом');
+    a.eq(done[0].status, 'refunded');
+    a.eq(w.balance, 90, 'ставка была 0: возвращать нечего, баланс не тронут');
+    a.eq(w.round('c-bad').bets.length, 0);
+  });
+
+  t.test('старые форматы: чужое и мусор дают новый профиль, а не ошибку', (a) => {
+    for (const text of ['{', 'null', '[]', '"строка"', '5', '{"v":2,"cents":1}', '{"v":1,"cents":"много","history":[]}', '{"v":1,"cents":null}', '{"balance":"109"}', '{}', '']) {
+      const w = openWallet(text);
+      a.eq(w.balance, 100, `«${text}»`);
+      a.eq(w.open, null);
+    }
+    a.eq(createWallet({ storage: { getItem: () => 42, setItem() {} }, key: 'k' }).balance, 100, 'хранилище вернуло не строку');
+    a.eq(readState(undefined), null);
+    a.deep(readState({ v: 1, cents: 5, history: [] }), { v: 1, cents: 5, history: [] });
+  });
+}
+
 // ─── Боты и лента (src/friends/bots.js) ──────────────────────────
 
 import { MONEY } from '../src/config.js';
@@ -911,6 +1046,7 @@ function screensTests(t) {
 export default (t) => {
   moneyTests(t);
   walletTests(t);
+  formatTests(t);
   botsTests(t);
   screensTests(t);
   friendsTests(t); // друг по ссылке (P1): tests/friends.test.js

@@ -28,6 +28,26 @@ const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).s
 const isOpen = (h) => h.kind === 'round' && (h.status === 'held' || h.status === 'ended');
 
 /**
+ * Сохранённое → состояние кошелька, или null, если это не кошелёк. Терпимо к старому: баланс не должен пропадать
+ * из-за лишней строгости. Понимаем v1 ({ v, cents, history }; поля раундов requested, left, tab добавлялись со временем
+ * и необязательны) и заготовку 29.09 ({ balance, history }, кредиты числом). Кредиты строкой или дробью округляем.
+ * В истории остаются записи-объекты с видом (kind), у раундов гарантированы ставка числом и список ставок.
+ */
+export function readState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const num = (x) => (typeof x === 'number' || (typeof x === 'string' && x.trim() !== '') ? Number(x) : NaN);
+  let cents;
+  if (raw.v === VERSION || (raw.v == null && 'cents' in raw)) cents = num(raw.cents);
+  else if (raw.v == null && typeof raw.balance === 'number') cents = toCents(raw.balance);
+  else return null;
+  if (!Number.isFinite(cents)) return null;
+  const history = (Array.isArray(raw.history) ? raw.history : [])
+    .filter((h) => h && typeof h === 'object' && typeof h.kind === 'string')
+    .map((h) => (h.kind === 'round' ? { ...h, stake: Number.isFinite(num(h.stake)) ? num(h.stake) : 0, bets: Array.isArray(h.bets) ? h.bets : [] } : h));
+  return { v: VERSION, cents: Math.round(cents), history };
+}
+
+/**
  * Что показать бейджем у фишки баланса. Списание и возврат: сколько ушло или пришло.
  * Расчёт: чистый итог раунда (+9 / −10), как на карточке итогов, а не выплата вместе с вернувшейся ставкой (+19).
  */
@@ -54,8 +74,8 @@ export function createWallet({ storage = null, key = MONEY.storageKey, start = M
 
   function load() {
     try {
-      const s = JSON.parse(storage?.getItem(key) ?? 'null');
-      if (s?.v === VERSION && Number.isInteger(s.cents) && Array.isArray(s.history)) return s;
+      const s = readState(JSON.parse(storage?.getItem(key) ?? 'null'));
+      if (s) return s;
     } catch {
       /* битые данные: новый профиль */
     }
