@@ -26,7 +26,7 @@ import { createView } from './meditation-view.js';
  */
 export const RULES = [
   { code: 'face_lost', holdMs: M.faceLostMs, priority: 4, text: 'Лицо вышло из кадра, вернись', warnText: 'Лицо вышло из кадра: вернись, иначе минус жизнь', label: 'лицо вышло из кадра' },
-  { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек, ты должен быть один', warnText: 'В кадре второй человек: пусть отойдёт, иначе минус жизнь', label: 'второй человек в кадре' },
+  { code: 'two_faces', holdMs: M.twoFacesMs, priority: 3, text: 'В кадре второй человек: должен остаться только ты', warnText: 'В кадре второй человек: пусть отойдёт, иначе минус жизнь', label: 'второй человек в кадре' },
   { code: 'eyes_open', holdMs: M.eyesOpenMs, priority: 2, text: 'Глаза открыты, закрой глаза', warnText: 'Глаза открыты: закрой, иначе минус жизнь', label: 'глаза открыты', needsFace: true },
   {
     code: 'head_moving', holdMs: M.headMoveMs, holdFrames: M.headMoveFrames, priority: 1, text: 'Голова двигается, замри', warnText: 'Голова двигается: замри, иначе минус жизнь', label: 'голова двигалась',
@@ -37,9 +37,9 @@ export const RULES = [
 const INTRO = 'Закрой глаза и замри';
 // «Встань в позицию»: что сделать для непройденной галочки
 const READY_HINTS = {
-  none: 'Лица не видно: сядь напротив камеры, лицо по центру, свет на лицо',
+  none: 'Лица не видно: сядь напротив камеры, лицо по центру',
   edge: 'Лицо у края кадра: сдвинься к центру',
-  crowd: 'В кадре второй человек: пусть отойдёт, ты должен быть один',
+  crowd: 'В кадре второй человек: пусть отойдёт, должен остаться только ты',
 };
 const FRESH = 10; // добавка к приоритету свежего нарушения: выше любого правила
 const round1 = (v) => Math.round(v * 10) / 10;

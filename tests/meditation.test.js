@@ -351,7 +351,7 @@ export default (t) => {
     run(10000);
     run(11100, two);
     a.deep(codes(), ['two_faces']);
-    a.eq(log.faults[0].text, 'В кадре второй человек, ты должен быть один');
+    a.eq(log.faults[0].text, 'В кадре второй человек: должен остаться только ты');
   });
 
   t.test('два лица меняются местами в выдаче модели: голова не «прыгает»', (a) => {
@@ -634,6 +634,9 @@ export default (t) => {
     a.eq(kr('7'), '0 кр.', 'строка вместо числа: не верим');
     const rep = (n) => plural(n, 'повтор', 'повтора', 'повторов');
     a.deep([1, 2, 5, 11, 12, 21, 22, 25].map(rep), ['повтор', 'повтора', 'повторов', 'повторов', 'повторов', 'повтор', 'повтора', 'повторов']);
+    a.eq(plural(4.5, 'кредит', 'кредита', 'кредитов'), 'кредита', 'дробное число: форма few');
+    a.eq(plural(1.5, 'секунда', 'секунды', 'секунд'), 'секунды');
+    a.eq(plural(1, 'секунда', 'секунды', 'секунд'), 'секунда', 'целые как раньше');
     a.eq(goalText('повторы', 15), '15 повторов');
     a.eq(goalText('секунды', 60), '1 минута');
     a.eq(goalText('секунды', 300), '5 минут');
@@ -688,7 +691,7 @@ export default (t) => {
     a.eq(v.detail, '6 из 15 повторов');
     a.eq(v.deltaText, '+4,5 кр.');
     a.eq(v.deltaTone, 'up');
-    a.eq(v.line, 'Ты выиграл: игрок не справился');
+    a.eq(v.line, 'Ты в плюсе: игрок не справился');
     a.eq(v.showDelta, true);
   });
 
@@ -697,11 +700,11 @@ export default (t) => {
     S = msg(S, { t: 'bet:ok', amount: 5 });
     S = msg(S, { t: 'start', challenge: CH }, 0);
     let lost = msg(S, { t: 'end', success: true, count: 15, target: 15, you: { amount: 5, delta: -5 } });
-    a.deep([resultView(lost).title, resultView(lost).deltaText, resultView(lost).deltaTone, resultView(lost).line], ['Сделал', '−5 кр.', 'down', 'Ты проиграл: игрок справился']);
+    a.deep([resultView(lost).title, resultView(lost).deltaText, resultView(lost).deltaTone, resultView(lost).line], ['Сделал', '−5 кр.', 'down', 'Ты в минусе: игрок справился']);
     const watcher = msg(lobbyOf(initialState('w')), { t: 'end', success: true, count: 15, target: 15 });
     const w = resultView(watcher);
     a.eq(w.showDelta, false);
-    a.eq(w.line, 'Ты смотрел без ставки');
+    a.eq(w.line, 'Смотришь без ставки');
     const cancelled = msg(S, { t: 'void', reason: 'camera' });
     a.eq(cancelled.phase, 'void');
     a.deep([voidView(cancelled).detail, voidView(cancelled).line], ['У игрока пропала камера', 'Ставка вернулась']);
@@ -754,7 +757,7 @@ export default (t) => {
     a.eq(next.result, null);
     a.deep(next.feed, []);
     a.eq(lobbyView(next).title, '💪 Отжимания: 20 повторов');
-    a.deep(lobbyView(next).facts, ['⏱ 02:00', 'Ставка игрока 10 кр.']);
+    a.deep(lobbyView(next).facts, ['⏱ 2:00', 'Ставка игрока 10 кр.']);
     // раунд идёт: лобби с тем же id не выбрасывает из эфира
     const live = msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0);
     a.eq(lobbyOf(live).phase, 'live');
@@ -786,7 +789,7 @@ export default (t) => {
     a.eq(S.phase, 'error');
     a.eq(connectView(S).retry, true);
     a.eq(connectView(S).busy, false);
-    a.eq(connectView({ ...S, errorKind: 'closed' }).text, 'Связь оборвалась. Проверь интернет и попробуй ещё раз');
+    a.eq(connectView({ ...S, errorKind: 'closed' }).text, 'Связь оборвалась. Проверь интернет и попробуй ещё раз.');
     S = reduce(S, { type: 'retry' });
     a.eq(S.phase, 'connecting');
     a.eq(connectView(S).busy, true);
@@ -796,12 +799,12 @@ export default (t) => {
     a.eq(reduce(inLobby, { type: 'status', status: 'open' }).link, 'open');
     // долгое подключение: сначала подсказка, потом ошибка; когда связь есть, ни то ни другое
     const slow = reduce(initialState('h'), { type: 'slow' });
-    a.eq(connectView(slow).text, 'Долго? Проверь, что игрок не закрыл страницу');
+    a.eq(connectView(slow).text, 'Долго? Проверь, что игрок не закрыл страницу.');
     a.eq(connectView(slow).retry, true);
     a.eq(reduce(initialState('h'), { type: 'giveup' }).phase, 'error');
     const open = reduce(initialState('h'), { type: 'status', status: 'open' });
     a.eq(reduce(open, { type: 'giveup' }).phase, 'connecting');
-    a.eq(connectView(open).text, 'Жду условия челленджа');
+    a.eq(connectView(open).text, 'Ждём условия челленджа');
     a.eq(reduce(lobbyOf(initialState('h')), { type: 'giveup' }).phase, 'lobby');
   });
 
@@ -920,7 +923,7 @@ export default (t) => {
       return next.notice.text;
     };
     a.eq(text('closed'), 'Ставки закрыты');
-    a.eq(text('repeat'), 'Ты уже поставил на этот раунд');
+    a.eq(text('repeat'), 'На этот раунд ставка уже есть');
     a.eq(text('poor'), 'Не хватает кредитов');
     a.eq(text('offline'), 'Нет связи с игроком, попробуй ещё раз');
     a.eq(text('invalid'), 'Такую ставку сделать нельзя');
@@ -1042,16 +1045,16 @@ export default (t) => {
 
   t.test('friend: понятный текст ошибки подключения по причине от peer.js', (a) => {
     const text = (error, kind = 'error') => connectView(reduce(initialState('h'), { type: 'status', status: kind, error, now: 0 })).text;
-    a.eq(text('peer-unavailable'), 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую');
+    a.eq(text('peer-unavailable'), 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую.');
     a.ok(text('timeout').startsWith('Игрок не отвечает. Проверь интернет'), text('timeout'));
     a.ok(text('lib').startsWith('Не загрузилась связь'), text('lib'));
     a.ok(text('socket-error').startsWith('Нет связи с сервером'), text('socket-error'));
     a.ok(text('network').startsWith('Нет связи с сервером'), text('network'));
     a.ok(text('browser-incompatible').includes('Chrome или Safari'), text('browser-incompatible'));
-    a.eq(text('что-то новое'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'неизвестная причина: общий текст');
-    a.eq(text('constructor'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'чужие ключи словаря не берём');
-    a.eq(text(undefined, 'closed'), 'Связь оборвалась. Проверь интернет и попробуй ещё раз');
-    a.eq(text({ x: 1 }), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую', 'причина не строка');
+    a.eq(text('что-то новое'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую.', 'неизвестная причина: общий текст');
+    a.eq(text('constructor'), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую.', 'чужие ключи словаря не берём');
+    a.eq(text(undefined, 'closed'), 'Связь оборвалась. Проверь интернет и попробуй ещё раз.');
+    a.eq(text({ x: 1 }), 'Игрок не отвечает. Проверь ссылку или попроси прислать новую.', 'причина не строка');
   });
 
   t.test('friend: кнопки ставки те же, что принимает хост (MONEY.friend.bets)', (a) => {
@@ -1098,7 +1101,7 @@ export default (t) => {
     const mine = msg({ ...lobbyOf(initialState('h'), { left: 5 }), balance: 100 }, { t: 'bet:ok', amount: 5 });
     const starting = lobbyOf(mine, { left: 0, open: false, note: 'starting' });
     a.deep(lobbyView(starting).notice, { tone: 'ok', text: 'Ставка принята' });
-    a.eq(lobbyView(starting).foot, 'Ты поставил 5 кр. против. Игрок стартует');
+    a.eq(lobbyView(starting).foot, 'Твоя ставка против: 5 кр. Игрок стартует');
     // сообщение bet:closed закрывает ставки
     const closed = msg({ ...lobbyOf(initialState('h'), { left: 5 }), balance: 100 }, { t: 'bet:closed' });
     a.deep([closed.open, closed.pending, lobbyView(closed).notice.text], [false, null, 'Ставки закрыты']);
@@ -1111,7 +1114,7 @@ export default (t) => {
     const gone = msg(S, { t: 'void', reason: 'left' });
     a.eq(gone.phase, 'void');
     const v = voidView(gone);
-    a.deep([v.title, v.detail, v.retry], ['Игрок отключился', 'Ставка вернулась. Попроси новую ссылку', true]);
+    a.deep([v.title, v.detail, v.retry], ['Игрок отключился', 'Ставка вернулась. Попроси новую ссылку.', true]);
     const noBet = msg(msg(lobbyOf(initialState('h')), { t: 'start', challenge: CH }, 0), { t: 'void', reason: 'left' });
     a.eq(voidView(noBet).detail, 'Попроси у игрока новую ссылку', 'без ставки про ставку не говорим');
     a.eq(voidView(msg(S, { t: 'void', reason: 'camera' })).retry, false, 'обычная отмена: ждём следующий раунд');

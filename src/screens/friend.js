@@ -28,7 +28,7 @@ const BETS = MONEY?.friend?.bets ?? STAKES; // те же суммы приним
 // Что ответил guest.bet(): 'sent' ждём ответа хоста, остальное сразу объясняем словами
 const BET_ANSWERS = {
   closed: 'Ставки закрыты',
-  repeat: 'Ты уже поставил на этот раунд',
+  repeat: 'На этот раунд ставка уже есть',
   poor: 'Не хватает кредитов',
   invalid: 'Такую ставку сделать нельзя',
   offline: 'Нет связи с игроком, попробуй ещё раз',
@@ -53,8 +53,12 @@ const defOf = (type) => own(CHALLENGES, type);
 /** 4.5 → «4,5 кр.», 5 → «5 кр.» */
 export const kr = (n) => `${String(Math.round(num(n) * 10) / 10).replace('.', ',')} кр.`;
 
-/** Русское склонение: plural(3, 'повтор', 'повтора', 'повторов') → 'повтора' */
+/** Лимит времени в виде m:ss: 90 → «1:30» (живые часы остаются mm:ss, см. formatTime). */
+const mss = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+
+/** Русское склонение: plural(3, 'повтор', 'повтора', 'повторов') → 'повтора'; дробным числам подходит форма few («4,5 кредита») */
 export function plural(n, one, few, many) {
+  if (!Number.isInteger(n)) return few;
   const m = Math.abs(n) % 100;
   const d = m % 10;
   if (m > 10 && m < 20) return many;
@@ -85,7 +89,7 @@ export function describeChallenge(ch) {
     label: def.label,
     unit: def.unit,
     goal: goalText(def.unit, num(ch?.target)),
-    time: typeof ch?.limitSec === 'number' && ch.limitSec > 0 && Number.isFinite(ch.limitSec) ? formatTime(ch.limitSec) : null,
+    time: typeof ch?.limitSec === 'number' && ch.limitSec > 0 && Number.isFinite(ch.limitSec) ? mss(ch.limitSec) : null,
     stake: num(ch?.stake),
   };
 }
@@ -358,7 +362,7 @@ export function lobbyView(S) {
     pool: { taken, total: d.stake, text: `${kr(taken)} из ${kr(d.stake)}`, ratio: d.stake ? taken / d.stake : 0 },
     options: betOptions(S),
     notice: lobbyNotice(S),
-    foot: S.myBet != null ? `Ты поставил ${kr(S.myBet)} против. ${closed ? 'Игрок стартует' : 'Ждём старт'}` : closed ? '' : 'Игрок нажмёт старт, и ставки закроются',
+    foot: S.myBet != null ? `Твоя ставка против: ${kr(S.myBet)} ${closed ? 'Игрок стартует' : 'Ждём старт'}` : closed ? '' : 'Игрок нажмёт старт, и ставки закроются',
   };
 }
 
@@ -379,9 +383,9 @@ export function resultView(S) {
   const unit = defOf(S.challenge?.type)?.unit;
   const delta = r.delta;
   const line =
-    r.amount <= 0 ? 'Ты смотрел без ставки'
-      : delta > 0 ? 'Ты выиграл: игрок не справился'
-        : delta < 0 ? 'Ты проиграл: игрок справился'
+    r.amount <= 0 ? 'Смотришь без ставки'
+      : delta > 0 ? 'Ты в плюсе: игрок не справился'
+        : delta < 0 ? 'Ты в минусе: игрок справился'
           : 'Ставка вернулась';
   return {
     success: r.success,
@@ -399,12 +403,12 @@ const VOID_REASONS = { camera: 'У игрока пропала камера' };
 /** Раунд отменён: причина и что с моей ставкой. Игрок отключился (left): раунда больше нет, можно зайти заново. */
 export function voidView(S) {
   if (S.voidReason === 'left') {
-    return { title: 'Игрок отключился', detail: S.myBet != null ? 'Ставка вернулась. Попроси новую ссылку' : 'Попроси у игрока новую ссылку', line: '', retry: true };
+    return { title: 'Игрок отключился', detail: S.myBet != null ? 'Ставка вернулась. Попроси новую ссылку.' : 'Попроси у игрока новую ссылку', line: '', retry: true };
   }
   return {
     title: 'Раунд отменён',
     detail: own(VOID_REASONS, S.voidReason) ?? 'Игрок прервал челлендж',
-    line: S.myBet != null ? 'Ставка вернулась' : 'Ты смотрел без ставки',
+    line: S.myBet != null ? 'Ставка вернулась' : 'Смотришь без ставки',
     retry: false,
   };
 }
@@ -413,7 +417,7 @@ export function voidView(S) {
 export function videoView(S) {
   if (S.hasVideo) return { show: false };
   if (S.videoEnded) return { show: true, busy: false, title: 'Видео прервалось', text: 'Счёт и ошибки идут дальше' };
-  if (S.videoLate) return { show: true, busy: false, title: 'Видео не приходит', text: 'Слабая связь у тебя или у игрока. Счёт и ошибки идут и без видео' };
+  if (S.videoLate) return { show: true, busy: false, title: 'Видео не приходит', text: 'Слабая связь у тебя или у игрока. Счёт и ошибки идут и без видео.' };
   return { show: true, busy: true, title: 'Ждём видео игрока', text: '' };
 }
 
@@ -423,27 +427,27 @@ export function lostView(S, now) {
   const gone = now - S.lostAt;
   if (gone < LOST_SHOW_MS) return null;
   if (gone < LOST_GIVEUP_MS) {
-    return { title: 'Связь с игроком пропала', text: 'Ждём игрока. Если он закрыл страницу, раунд не продолжится', reload: false };
+    return { title: 'Связь с игроком пропала', text: 'Ждём игрока. Если он закрыл страницу, раунд не продолжится.', reload: false };
   }
-  return { title: 'Игрок не вернулся', text: 'Обнови страницу: ставка вернётся, и можно зайти снова', reload: true };
+  return { title: 'Игрок не вернулся', text: 'Обнови страницу: ставка вернётся, и можно зайти снова.', reload: true };
 }
 
 // Причина от peer.js (guest:status error) → что сказать другу. Типы PeerJS: peer-unavailable, network, socket-error ...
 const ERROR_TEXTS = {
-  'peer-unavailable': 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую',
-  timeout: 'Игрок не отвечает. Проверь интернет и ссылку, потом попробуй ещё раз',
-  lib: 'Не загрузилась связь с игроком. Проверь интернет и попробуй ещё раз',
-  network: 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
-  'socket-error': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
-  'socket-closed': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз',
-  'server-error': 'Сервер связи сейчас не отвечает. Попробуй ещё раз чуть позже',
-  'browser-incompatible': 'Этот браузер не умеет видео по ссылке. Открой ссылку в Chrome или Safari',
+  'peer-unavailable': 'Игрок не нашёлся. Проверь ссылку или попроси прислать новую.',
+  timeout: 'Игрок не отвечает. Проверь интернет и ссылку, потом попробуй ещё раз.',
+  lib: 'Не загрузилась связь с игроком. Проверь интернет и попробуй ещё раз.',
+  network: 'Нет связи с сервером. Проверь интернет и попробуй ещё раз.',
+  'socket-error': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз.',
+  'socket-closed': 'Нет связи с сервером. Проверь интернет и попробуй ещё раз.',
+  'server-error': 'Сервер связи сейчас не отвечает. Попробуй ещё раз чуть позже.',
+  'browser-incompatible': 'Этот браузер не умеет видео по ссылке. Открой ссылку в Chrome или Safari.',
 };
 
 function errorText(S) {
   const byCode = own(ERROR_TEXTS, S.errorCode);
   if (byCode) return byCode;
-  return S.errorKind === 'closed' ? 'Связь оборвалась. Проверь интернет и попробуй ещё раз' : 'Игрок не отвечает. Проверь ссылку или попроси прислать новую';
+  return S.errorKind === 'closed' ? 'Связь оборвалась. Проверь интернет и попробуй ещё раз.' : 'Игрок не отвечает. Проверь ссылку или попроси прислать новую.';
 }
 
 /** Текст экрана подключения по состоянию. */
@@ -452,8 +456,8 @@ export function connectView(S) {
     return { title: 'Не получилось подключиться', text: errorText(S), busy: false, retry: true };
   }
   return {
-    title: 'Подключаюсь к игроку',
-    text: S.link === 'open' ? 'Жду условия челленджа' : S.slow ? 'Долго? Проверь, что игрок не закрыл страницу' : 'Это займёт пару секунд',
+    title: 'Подключаемся к игроку',
+    text: S.link === 'open' ? 'Ждём условия челленджа' : S.slow ? 'Долго? Проверь, что игрок не закрыл страницу.' : 'Это займёт пару секунд',
     busy: true,
     retry: S.slow && S.link !== 'open',
   };
@@ -467,7 +471,7 @@ const who = (guest) => ({ name: guest?.name || 'Ты', avatar: guest?.avatar || 
 
 const skeleton = () => `
   <div class="friend" data-phase="connecting" data-link="connecting">
-    <div class="friend__link" data-link-banner hidden>Связь с игроком пропала. Обнови страницу, чтобы зайти снова</div>
+    <div class="friend__link" data-link-banner hidden>Связь с игроком пропала. Обнови страницу, чтобы зайти снова.</div>
 
     <section class="friend__view friend__view--connect">
       <div class="panel panel--narrow friend__card friend__card--center">
