@@ -39,7 +39,8 @@ const GATE = 'pose_gate'; // код подсказки «поза не для с
 /**
  * Почему тело не видно: подсказка называет то, чего не видно, а не «что-то не так».
  * У причины свой код для итогов (лог считает их отдельно); все коды visibility* боты читают как тему «корпус».
- * dark: ни одна нужная точка не видна уверенно (темно или свет в спину); окно за спиной делает из человека силуэт.
+ * dark: ни одна нужная точка не видна уверенно (темно или свет в спину; окно за спиной делает из человека силуэт)
+ * или позу потеряли, когда человек был посреди кадра (шум матрицы, размытие): ушёл бы из кадра, был бы у края.
  */
 export const SEEN_WHY = {
   nobody: { code: 'visibility_nobody', kind: 'visibility', label: 'никого в кадре', hint: NOBODY_HINT, joints: [] },
@@ -50,6 +51,9 @@ export const SEEN_WHY = {
   other: VISIBILITY,
 };
 
+/** Ноги и плечи: у края кадра они «не видны». Руки не в счёт: над головой, при махах и у края кадра они бывают законно. */
+const EDGE_KEYS = ['shoulder', 'hip', 'knee', 'ankle'];
+
 /**
  * Что мешает видеть тело: ключ SEEN_WHY или null, если нужные суставы стороны idx видны (то же условие, что ставит счёт на паузу).
  * keys: нужные суставы (SIDE), например ['shoulder', 'hip', 'knee', 'ankle'].
@@ -57,13 +61,20 @@ export const SEEN_WHY = {
 export function hiddenReason(lm, idx, keys) {
   const seen = keys.map((key) => [key, lm[idx[key]]?.visibility ?? 0]);
   const bad = seen.filter(([, v]) => v < REPS.minVisibility).map(([key]) => key);
-  if (!bad.length) return null;
-  if (Math.max(...seen.map(([, v]) => v)) < REPS.darkMaxVisibility) return 'dark';
-  if (bad.includes('ankle') || bad.includes('knee')) return 'legs';
-  if (bad.includes('shoulder')) return 'shoulders';
+  // Сустав у самого края кадра (или за ним) тоже не виден: модель у обрезанного тела всё равно даёт visibility 0.9+
+  // и прижимает точку к краю, счёт тихо ошибается. Здесь только «отойди», без «поставь камеру сбоку».
+  const cut = keys.filter((key) => EDGE_KEYS.includes(key) && !bad.includes(key) && atEdge(lm[idx[key]], REPS.edgeMargin));
+  if (!bad.length && !cut.length) return null;
+  if (bad.length && Math.max(...seen.map(([, v]) => v)) < REPS.darkMaxVisibility) return 'dark';
+  const out = [...bad, ...cut];
+  if (out.includes('ankle') || out.includes('knee')) return 'legs';
+  if (out.includes('shoulder')) return 'shoulders';
   if (bad.includes('wrist') || bad.includes('elbow')) return 'arms';
   return 'other';
 }
+
+/** Точка на расстоянии меньше margin от края кадра или за краем (координаты 0..1). */
+export const atEdge = (p, margin) => Boolean(p) && (p.x < margin || p.x > 1 - margin || p.y < margin || p.y > 1 - margin);
 
 /**
  * Коэффициент EMA для кадра длиной dt мс: alpha на кадр REPS.frameMs, при другой частоте
@@ -246,6 +257,8 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
   let why = 'other'; // причина, по которой тело не видно: ключ SEEN_WHY, по ней текст подсказки
   let whyNext = null; // новая причина ждёт, пока продержится REPS.fault.minMs (текст не мигает)
   let whySince = 0;
+  let hadPose = false; // позу хоть раз видели
+  let lastAtEdge = false; // в последний раз какой-то нужный сустав был у края кадра
   let gateHint = null;
   let gateFrames = 0;
   let last = null; // последний кадр с видимым телом: { lm, idx, side, m }
@@ -374,11 +387,16 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   /**
    * Сторона тела и «видно ли всё нужное»: одно условие для счёта (пауза) и для ready (галочка «тело в кадре»).
-   * reason: null, если видно, иначе ключ SEEN_WHY (нет позы вообще: nobody).
+   * reason: null, если видно, иначе ключ SEEN_WHY (нет позы: nobody, а если человека видели посреди кадра и модель потеряла его, dark).
    */
   function look(lm) {
     const pick = lm ? pickSide(lm, def.sideKeys) : null;
-    const reason = pick ? hiddenReason(lm, pick.idx, def.visible) : 'nobody';
+    if (pick) {
+      // где человека видели в последний раз: у края (ушёл из кадра) или посреди (модель его потеряла: темно, шум)
+      lastAtEdge = def.visible.some((key) => EDGE_KEYS.includes(key) && atEdge(lm[pick.idx[key]], REPS.lostEdgeMargin));
+      hadPose = true;
+    }
+    const reason = pick ? hiddenReason(lm, pick.idx, def.visible) : hadPose && !lastAtEdge ? 'dark' : 'nobody';
     return { pick, seen: reason == null, reason };
   }
 
