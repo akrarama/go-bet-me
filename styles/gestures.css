@@ -187,7 +187,7 @@
   gap: 24px 40px;
 }
 .lobby-card { display: flex; flex-direction: column; gap: 18px; }
-.screen--lobby { justify-content: flex-start; overflow-y: auto; }
+.screen--lobby { justify-content: flex-start; overflow-y: auto; padding-top: calc(var(--safe-t) + 72px); padding-bottom: calc(var(--safe-b) + 100px); }
 .screen--lobby > .lobby { margin-block: auto; } /* по центру, когда влезает; иначе от верха с прокруткой */
 
 .lobby-banner {
@@ -221,7 +221,14 @@
 }
 @keyframes lobby-bet-in { from { opacity: 0; transform: translateX(-18px) scale(0.97); } }
 .lobby-bet__avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-3); font-size: 22px; line-height: 1; }
-.lobby-bet__name { overflow: hidden; font-size: 17px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-bet__who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lobby-bet__name { min-width: 0; overflow: hidden; font-size: 17px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-bet__tag {
+  flex: none; padding: 3px 8px; border-radius: var(--r-pill); white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+  font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.lobby-bet--link { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .lobby-bet__amount { color: var(--danger); font-family: var(--font-display); font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .lobby-empty {
@@ -249,6 +256,33 @@
   height: 100%; border-radius: inherit; background: var(--danger); box-shadow: 0 0 12px var(--danger-glow);
   transform: scaleX(var(--fill, 0)); transform-origin: left center; transition: transform 0.7s var(--ease-out);
 }
+
+/* Карточка приглашения друга (P1): QR, короткая ссылка, «Смотрят: N». Есть только пока есть peer:ready. */
+
+.lobby-invite {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 14px; padding: 12px 16px 12px 12px;
+  animation: lobby-bet-in 0.55s var(--ease-spring) backwards;
+}
+.lobby-invite[hidden] { display: none; }
+.invite-qr { position: relative; width: 108px; aspect-ratio: 1; border-radius: var(--r-sm); overflow: hidden; background: var(--text); }
+.invite-qr:not(.is-ready) { animation: invite-wait 1.2s ease-in-out infinite; } /* пока грузится библиотека */
+.invite-qr svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; fill: var(--bg); }
+.lobby-invite.is-noqr { grid-template-columns: minmax(0, 1fr); }
+.lobby-invite.is-noqr .invite-qr { display: none; }
+.invite-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.invite-text { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; }
+.invite-link { margin: 0; color: var(--muted); font-size: 13px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.invite-watch { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; font-size: 15px; font-weight: 700; }
+.invite-watch b { font-weight: 800; font-variant-numeric: tabular-nums; }
+.invite-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.invite-dot.is-live { background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: invite-pulse 1.6s ease-in-out infinite; }
+.invite-faces { display: inline-flex; padding-left: 6px; }
+.invite-face {
+  width: 26px; height: 26px; margin-left: -6px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-3); border: 2px solid var(--bg); font-size: 14px; line-height: 1;
+}
+@keyframes invite-wait { 50% { opacity: 0.6; } }
+@keyframes invite-pulse { 50% { opacity: 0.45; transform: scale(0.8); } }
 
 .lobby-start { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .lobby-gauge { position: relative; width: 200px; aspect-ratio: 1; display: grid; place-items: center; margin-bottom: 10px; }
@@ -388,6 +422,8 @@
   .lobby-gauge__icon { font-size: 62px; }
   .lobby-back { margin-top: 10px; }
   .lobby-go { min-height: 60px; margin-top: 8px; }
+  .invite-qr { width: 96px; }
+  .lobby-invite { padding-block: 10px; }
 
   .check { gap: 14px; }
   .check-dial { width: 184px; }
@@ -397,6 +433,14 @@
 }
 
 /* Узкий экран: колонки друг под другом */
+
+@media (min-width: 841px) {
+  .lobby.has-invite { grid-template-areas: "card start" "invite start"; }
+  .lobby.has-invite > .lobby-card { grid-area: card; }
+  .lobby.has-invite > .lobby-start { grid-area: start; }
+  .lobby.has-invite > .lobby-invite { grid-area: invite; }
+}
+.lobby.has-invite .lobby-card { gap: 14px; }
 
 @media (max-width: 840px) {
   .lobby { grid-template-columns: minmax(0, 480px); justify-content: center; gap: 20px; }
@@ -430,8 +474,14 @@
   .setup-help { grid-column: 1 / -1; grid-row: 1; font-size: 14px; }
   .setup-back, .setup-next { min-width: 0; min-height: 72px; padding-inline: 12px; }
 
-  .screen--lobby { padding-top: calc(var(--safe-t) + 64px); padding-bottom: calc(var(--safe-b) + 40px); }
+  .screen--lobby { padding-top: calc(var(--safe-t) + 60px); padding-bottom: calc(var(--safe-b) + 24px); }
+  .lobby { gap: 16px; }
   .lobby-card { gap: 14px; padding: 18px 16px; }
+  .lobby-invite { gap: 12px; padding: 10px 12px 10px 10px; }
+  .invite-qr { width: 96px; }
+  .invite-body { gap: 3px; }
+  .invite-text { font-size: 13px; line-height: 1.3; }
+  .invite-link { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lobby-gauge { width: 116px; }
   .lobby-gauge__icon { font-size: 44px; }
   .lobby-start__label { font-size: 20px; }
