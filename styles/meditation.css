@@ -18,7 +18,7 @@
   max-width: calc(100vw - 2 * (var(--gutter) + min(340px, 34vw) + 8px));
   opacity: 0; visibility: hidden;
   transform: translateY(-6px) scale(0.97);
-  transition: opacity 0.35s var(--ease-out), transform 0.35s var(--ease-out), visibility 0s linear 0.35s;
+  transition: opacity 0.35s var(--ease-out), transform 0.35s var(--ease-out), visibility 0s 0.35s;
 }
 .med[data-mode="grace"] .med__group--grace,
 .med[data-mode="main"] .med__group--main,
@@ -62,10 +62,11 @@
 /* Голова: неподвижна (точка в центре) или двигается (дуги по бокам, лёгкое покачивание) */
 .med__chip:not([data-state="move"]) .med__i--move,
 .med__chip[data-state="move"] .med__i--still { opacity: 0; }
-.med__chip[data-state="move"] .med__i--move { animation: med-sway 0.7s ease-in-out infinite alternate; }
-@keyframes med-sway { from { transform: translateX(-1.3px); } to { transform: translateX(1.3px); } }
+.med__chip[data-state="move"] .med__i--move { animation: med-sway 1.4s var(--ease-out) infinite; }
+@keyframes med-sway { 0%, 100% { transform: translateX(-1.3px); } 50% { transform: translateX(1.3px); } }
 
-/* «Настройся»: кольцо заполняется за первые 5 с (шаг раз в секунду, между шагами переход) */
+/* «Настройся»: кольцо заполняется за первые 5 с (шаг раз в секунду, между шагами переход).
+   linear здесь не кривая, а ровная скорость отсчёта, как у .spinner в base.css: с ease-out кольцо дёргалось бы каждую секунду */
 .med__ring-track { stroke: var(--line-strong); }
 .med__ring-fill {
   stroke: var(--accent); stroke-width: 2.2;

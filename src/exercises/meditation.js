@@ -54,7 +54,7 @@ export function createController({ challenge, bus, feedback, debug }) {
   let lastTwoAt = -Infinity; // когда последний раз в кадре было два лица
   let jumpSince = null; // одинокое лицо далеко от прошлого носа: с какого кадра
   let fresh = null; // { code, until }: подсказка нового нарушения поверх старых
-  let view = null; // картинка поверх видео: meditation-view.js
+  const view = createView(); // картинка поверх видео: DOM не трогает до первого draw
 
   const c = {
     model: 'face',
@@ -70,8 +70,8 @@ export function createController({ challenge, bus, feedback, debug }) {
     paused: 0, // сколько таймер стоял, с
     /** Данные лица последнего кадра (с подменой из клавиш отладки). */
     faceData: null,
-    /** Что видно сейчас: для отрисовки и отладки. primary: индекс главного лица в faceData.faces. */
-    view: { faces: 0, primary: -1, closed: null, eyeLevel: null, shift: 0, moving: false, calm: false, grace: 0, pending: null, active: null },
+    /** Что видно сейчас: для отрисовки и отладки. primary: индекс главного лица в faceData.faces, fired: списанные и не исправленные. */
+    view: { faces: 0, primary: -1, closed: null, eyeLevel: null, shift: 0, moving: false, calm: false, grace: 0, pending: null, active: null, fired: [] },
 
     start(t) {
       started = c.started = true;
@@ -130,7 +130,7 @@ export function createController({ challenge, bus, feedback, debug }) {
         shift = track.shift(aspect);
         moving = shift > M.headMoveMax;
         const b = blink(res.blendshapes?.[i]);
-        if (b != null) {
+        if (Number.isFinite(b)) {
           eyeLevel = ema(eyeLevel, b, M.eyesEma);
           if (eyeLevel > M.eyesClosedMin) closed = true;
           else if (closed !== true || eyeLevel < M.eyesClosedMin - M.eyesHysteresis) closed = false;
@@ -181,6 +181,7 @@ export function createController({ challenge, bus, feedback, debug }) {
       };
       let pending = null;
       let active = null;
+      const fired = [];
       for (const s of rules) {
         const { rule } = s;
         if (on[rule.code]) {
@@ -190,6 +191,7 @@ export function createController({ challenge, bus, feedback, debug }) {
             // нарушение ещё не исправили: подсказка держится (без звука), жизнь второй раз не списываем;
             // пока свежая подсказка другого нарушения на экране, свою не просим
             active ??= rule.code;
+            fired.push(rule.code);
             s.shown = true;
             const freshOn = fresh && t < fresh.until;
             if (!freshOn || fresh.code === rule.code) {
@@ -204,6 +206,7 @@ export function createController({ challenge, bus, feedback, debug }) {
           if (ready && t >= nextFaultAt && !c.done) {
             fire(s, t);
             active ??= rule.code;
+            fired.push(rule.code);
           } else pending ??= rule.code;
         } else {
           s.frames = 0;
@@ -223,7 +226,7 @@ export function createController({ challenge, bus, feedback, debug }) {
         }
       }
 
-      c.view = { faces: n, primary: i, closed, eyeLevel, shift, moving, calm, grace: grace ? (graceEnd - t) / 1000 : 0, pending, active };
+      c.view = { faces: n, primary: i, closed, eyeLevel, shift, moving, calm, grace: grace ? (graceEnd - t) / 1000 : 0, pending, active, fired };
       debug?.set('медитация', `${calm ? 'идёт' : 'пауза'}, лиц ${n}, глаза ${eyeLevel == null ? '?' : eyeLevel.toFixed(2)}, нос ${(shift * 100).toFixed(1)}%`);
       debug?.set('нарушение', active ?? pending ?? 'нет');
     },
@@ -231,12 +234,11 @@ export function createController({ challenge, bus, feedback, debug }) {
     /** Своя отрисовка поверх видео (экран LIVE зовёт её вместо скелета, и во время отсчёта тоже). */
     draw(frame, d) {
       if (!c.faceData || c.faceData.t !== frame.face?.t) c.faceData = simulate(frame.face, frame.t);
-      (view ??= createView()).draw(frame, d, c);
+      view.draw(frame, d, c);
     },
 
     stop() {
-      view?.destroy();
-      view = null;
+      view.destroy(); // после этого вид чипы больше не создаёт, даже если кадр ещё придёт
       if (current === c) current = null;
     },
 
