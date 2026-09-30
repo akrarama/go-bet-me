@@ -4,6 +4,9 @@
 import * as dips from '../src/exercises/dips.js';
 import * as pullup from '../src/exercises/pullup.js';
 import * as burpee from '../src/exercises/burpee.js';
+import { faultTheme, poolFor } from '../src/friends/bots.js';
+import { streakText } from '../src/screens/result.js';
+import { CHALLENGES } from '../src/config.js';
 
 /** Контроллер с журналом шины и тихим feedback. */
 export function setup(mod, { target = 999, options } = {}) {
@@ -224,6 +227,35 @@ export default (t) => {
 
   t.test('берпи: пока человек не постоял, круги не считаются (начал из упора)', (a) => {
     a.deep(got(run([...circle().slice(0, 40)])), []);
+  });
+
+  // ─── Вокруг упражнений: боты, итоги, config ───
+  t.test('боты: подколы на ошибки новых упражнений по теме', (a) => {
+    a.eq(faultTheme({ code: 'pullup_chin', text: 'подбородок ниже перекладины' }, 'pullup'), 'chin');
+    a.eq(faultTheme({ code: 'burpee_no_jump', text: 'не было прыжка' }, 'burpee'), 'skip');
+    a.eq(faultTheme({ code: 'burpee_no_plank', text: 'не было упора лёжа' }, 'burpee'), 'skip');
+    a.eq(faultTheme({ code: 'dips_lean', text: 'Корпус сильно завален вперёд' }, 'dips'), 'back');
+    a.eq(faultTheme({ code: 'pullup_half_down', text: 'не подтянулся' }, 'pullup'), null);
+  });
+
+  t.test('боты: у каждого типа свои реплики на старт, счёт и финиш', (a) => {
+    for (const type of Object.keys(CHALLENGES)) {
+      for (const kind of ['opener', 'milestone', 'botWon', 'botLost']) a.ok(poolFor(kind, type).length > 6, `${kind}/${type}`);
+    }
+    for (const type of ['dips', 'pullup', 'burpee']) a.ok(poolFor('opener', type).some((l) => l.length && !poolFor('opener', 'squat').includes(l)), type);
+  });
+
+  t.test('итоги: «Лучшая серия» у всех упражнений на повторы, у планки и медитации нет', (a) => {
+    for (const type of ['squat', 'pushup', 'dips', 'pullup', 'burpee']) a.ok(streakText({ type, extra: { bestStreak: 9 } }) !== '', type);
+    for (const type of ['plank', 'meditation']) a.eq(streakText({ type, extra: { bestStreak: 9 } }), '', type);
+  });
+
+  t.test('config: у каждого типа есть место камеры и описание «как выполнять»', (a) => {
+    for (const [type, def] of Object.entries(CHALLENGES)) {
+      a.ok(def.placement && def.howto, type);
+      a.ok(!/—/.test(def.howto + def.placement), `${type}: без длинного тире`);
+    }
+    a.ok(/боком/.test(CHALLENGES.pushup.howto) && /боком/.test(CHALLENGES.plank.howto), 'отжимания и планка: боком к камере');
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───
