@@ -6,6 +6,7 @@ import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskF
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 import { createFeedback } from '../src/feedback.js';
 import { VERDICT_HINT } from '../src/screens/liveness.js';
+import { cleanName, cleanAvatar, cleanUrl, shortLink, createInvite, attachInvite, betRow, qrSvg, loadQr } from '../src/ui/invite.js';
 
 const G = GESTURES;
 const STEP = 50;
@@ -805,5 +806,176 @@ export default (t) => {
     f.filter(100, 100, 0);
     const p = f.filter(200, 200, 0);
     a.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+  });
+
+  // ─── Приглашение друга в LOBBY (P1): ссылка, QR, «Смотрят: N», ставки по ссылке ──
+
+  t.test('приглашение: короткая ссылка без протокола, длинный id укорочен', (a) => {
+    a.eq(shortLink('https://akrarama.github.io/go-bet-me/?join=demo1234'), 'akrarama.github.io/go-bet-me/?join=demo1234');
+    a.eq(shortLink('https://a.io/x/?join=123e4567-e89b-12d3-a456-426614174000'), 'a.io/x/?join=123e4…000');
+    a.eq(shortLink('http://www.a.io/?join=abc'), 'a.io/?join=abc');
+    a.eq(shortLink(null), '');
+  });
+
+  t.test('приглашение: cleanUrl пускает только http(s) без пробелов', (a) => {
+    a.eq(cleanUrl('https://x.io/?join=1'), 'https://x.io/?join=1');
+    a.eq(cleanUrl('  http://x.io  '), 'http://x.io');
+    a.eq(cleanUrl('javascript:alert(1)'), null);
+    a.eq(cleanUrl('https://x.io/a b'), null);
+    a.eq(cleanUrl(''), null);
+    a.eq(cleanUrl(42), null);
+  });
+
+  t.test('приглашение: имя и аватар друга режутся по длине и не бывают пустыми', (a) => {
+    a.eq(cleanName('  Тимур   Иванов '), 'Тимур Иванов');
+    a.eq(cleanName('x'.repeat(50)).length, GESTURES.invite.nameMax);
+    a.eq(Array.from(cleanName('😀'.repeat(40))).length, GESTURES.invite.nameMax, 'эмодзи режутся по символам, не по половинкам');
+    a.eq(cleanName('   '), 'Друг');
+    a.eq(cleanName(undefined), 'Друг');
+    a.eq(cleanName('<b>Я</b>'), '<b>Я</b>', 'экранирует разметка экрана (esc), не эта логика');
+    a.eq(cleanAvatar('👩‍🦰'), '👩‍🦰');
+    a.eq(cleanAvatar(''), '🙂');
+    a.eq(Array.from(cleanAvatar('a'.repeat(30))).length, 8);
+  });
+
+  t.test('приглашение: peer:ready даёт карточку, peer:error убирает', (a) => {
+    const inv = createInvite();
+    a.eq(inv.on, false);
+    inv.ready({ id: 'h1', url: 'https://x.io/?join=h1' });
+    a.eq(inv.on, true);
+    a.eq(inv.url, 'https://x.io/?join=h1');
+    a.eq(inv.id, 'h1');
+    inv.fail();
+    a.eq(inv.on, false);
+    a.eq(inv.url, null);
+  });
+
+  t.test('приглашение: без нормальной ссылки карточки нет', (a) => {
+    const inv = createInvite();
+    inv.ready({ id: 'h1' });
+    inv.ready({ id: 'h1', url: 'javascript:1' });
+    inv.ready(null);
+    inv.ready(undefined);
+    a.eq(inv.on, false);
+  });
+
+  t.test('приглашение: «Смотрят» считает друзей по join и leave, повторный join не двоит', (a) => {
+    const inv = createInvite();
+    inv.ready({ id: 'h1', url: 'https://x.io/?join=h1' });
+    inv.join({ id: 'a', name: 'Тимур', avatar: '🧑' });
+    inv.join({ id: 'a', name: 'Тимур', avatar: '🧑' });
+    inv.join({ id: 'b', name: 'Аня', avatar: '👩' });
+    a.eq(inv.count, 2);
+    a.deep(inv.friends.map((f) => f.name), ['Тимур', 'Аня']);
+    inv.leave({ id: 'a' });
+    inv.leave({ id: 'нет такого' });
+    a.eq(inv.count, 1);
+    inv.join({});
+    inv.join(null);
+    inv.leave(null);
+    a.eq(inv.count, 1);
+  });
+
+  t.test('приглашение: новый id хоста и peer:error сбрасывают друзей, тот же хост нет', (a) => {
+    const inv = createInvite();
+    inv.ready({ id: 'h1', url: 'https://x.io/?join=h1' });
+    inv.join({ id: 'a' });
+    inv.ready({ id: 'h1', url: 'https://x.io/?join=h1' });
+    a.eq(inv.count, 1, 'повтор того же peer:ready');
+    inv.ready({ id: 'h2', url: 'https://x.io/?join=h2' });
+    a.eq(inv.count, 0, 'новый хост');
+    inv.join({ id: 'a' });
+    inv.fail();
+    a.eq(inv.count, 0);
+  });
+
+  t.test('приглашение: подписчики получают каждое изменение, после отписки нет', (a) => {
+    const inv = createInvite();
+    let n = 0;
+    const off = inv.subscribe(() => n++);
+    inv.ready({ id: 'h', url: 'https://x.io/' });
+    inv.join({ id: 'a' });
+    inv.leave({ id: 'a' });
+    a.eq(n, 3);
+    inv.leave({ id: 'a' });
+    a.eq(n, 3, 'ушедшего второй раз убрать нельзя: события нет');
+    off();
+    inv.fail();
+    a.eq(n, 3);
+    const idle = createInvite();
+    let m = 0;
+    idle.subscribe(() => m++);
+    idle.fail();
+    a.eq(m, 0, 'peer:error без карточки ничего не меняет');
+  });
+
+  t.test('приглашение: события шины доходят до хранилища, отписка снимает все', (a) => {
+    const handlers = new Map();
+    const fakeBus = {
+      on(type, fn) {
+        handlers.set(type, fn);
+        return () => handlers.delete(type);
+      },
+    };
+    const inv = createInvite();
+    const off = attachInvite(fakeBus, inv);
+    a.deep([...handlers.keys()].sort(), ['friend:join', 'friend:leave', 'peer:error', 'peer:ready']);
+    handlers.get('peer:ready')({ id: 'h', url: 'https://x.io/?join=h' });
+    handlers.get('friend:join')({ id: 'a', name: 'Тимур', avatar: '🧑' });
+    a.eq(inv.on, true);
+    a.eq(inv.count, 1);
+    handlers.get('friend:leave')({ id: 'a' });
+    a.eq(inv.count, 0);
+    handlers.get('peer:error')({ error: 'нет облака' });
+    a.eq(inv.on, false);
+    off();
+    a.eq(handlers.size, 0);
+  });
+
+  t.test('ставки: друг по ссылке отличается от бота, чужие данные приводятся к безопасному виду', (a) => {
+    a.eq(betRow({ id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true }).link, false);
+    a.eq(betRow({ id: 'peer:abc', name: 'Тимур', avatar: '🧑', amount: 5, bot: false }).link, true);
+    a.eq(betRow({ id: 'peer:xyz', name: 'Аня', amount: 10 }).link, true, 'bot не указан, id вида peer:');
+    a.eq(betRow({ id: 'bot-x', name: 'Х', amount: 5 }).link, false);
+    a.eq(betRow({ id: 'peer:1', bot: true, name: 'Х', amount: 5 }).link, false, 'бот всегда бот');
+    const odd = betRow({ id: 'peer:q', name: 'n'.repeat(60), amount: '7', avatar: null });
+    a.eq(odd.name.length, GESTURES.invite.nameMax);
+    a.eq(odd.amount, 7);
+    a.eq(odd.avatar, '🙂');
+    a.eq(betRow({ id: 'peer:z', amount: 'abc' }).amount, 0);
+    a.eq(betRow({ id: 'peer:z', amount: 5 }).name, 'Друг');
+  });
+
+  // Поддельная библиотека QR: клетки задаёт маска ('#' тёмная)
+  const fakeQr = (rows) => () => ({ addData() {}, make() {}, getModuleCount: () => rows.length, isDark: (r, c) => rows[r][c] === '#' });
+
+  t.test('QR: один path, тёмные клетки в ряд склеены, тихая зона внутри viewBox', (a) => {
+    const svg = qrSvg(fakeQr(['###', '#.#', '.##']), 'https://x.io');
+    a.ok(svg.startsWith('<svg viewBox="-2 -2 7 7"'), svg);
+    a.ok(svg.includes('M0 0h3v1h-3z'), 'ряд 0 одним куском');
+    a.ok(svg.includes('M0 1h1v1h-1z') && svg.includes('M2 1h1v1h-1z'), 'ряд 1: клетки по краям');
+    a.ok(svg.includes('M1 2h2v1h-2z'), 'ряд 2: две клетки справа');
+    a.eq((svg.match(/M/g) || []).length, 4);
+    a.ok(!svg.includes('x.io'), 'в картинке только клетки, текста ссылки нет');
+  });
+
+  t.test('QR: сбой библиотеки или слишком длинный текст дают null', (a) => {
+    a.eq(qrSvg(() => { throw new Error('нет'); }, 'x'), null);
+    a.eq(qrSvg(() => ({ addData() { throw new Error('переполнение'); }, make() {}, getModuleCount: () => 0, isDark: () => false }), 'x'), null);
+  });
+
+  t.test('QR: библиотеке уходит авто-размер, уровень M и текст ссылки', (a) => {
+    const seen = [];
+    const factory = (type, level) => {
+      seen.push(type, level);
+      return { addData: (text) => seen.push(text), make() {}, getModuleCount: () => 1, isDark: () => true };
+    };
+    qrSvg(factory, 'https://x.io/?join=1');
+    a.deep(seen, [0, 'M', 'https://x.io/?join=1']);
+  });
+
+  t.test('QR: вне браузера loadQr отвечает null и не падает', async (a) => {
+    if (typeof window !== 'undefined') return; // в браузере библиотека грузится с CDN по-настоящему
+    a.eq(await loadQr(), null);
   });
 };

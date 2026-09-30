@@ -129,6 +129,12 @@ export const GESTURES = {
   minVisibility: 0.5,
   livenessSec: 5,
   livenessTasks: ['left_hand_up', 'right_hand_up', 'Thumb_Up', 'Open_Palm'],
+  invite: {
+    qrUrl: 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js', // грузим лениво, когда пришёл peer:ready
+    qrLoadMs: 8000, // библиотека не ответила за столько: карточка без QR, только ссылка
+    nameMax: 20, // символов в имени друга (имя приходит по сети)
+    faces: 4, // сколько аватарок зрителей показывать в «Смотрят: N»
+  },
 };
 
 // ─── Блок 3: Деньги и друзья ────────────────────────────────────
