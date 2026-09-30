@@ -232,7 +232,7 @@ export const GESTURES = {
   handReleaseY: 0.02, // гистерезис: рука опущена, когда запястье ниже носа на столько (доля высоты кадра)
   handLowHintMs: 1000, // рука поднята, но ниже головы столько = подсказка
   minVisibility: 0.5,
-  livenessSec: 5,
+  livenessSec: 10, // было 5: с телефоном в руке не успевали переложить его и поднять нужную руку (живой тест)
   livenessTasks: ['left_hand_up', 'right_hand_up', 'Thumb_Up', 'Open_Palm'],
   invite: {
     qrUrl: 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js', // грузим лениво, когда пришёл peer:ready

@@ -510,10 +510,11 @@ export default (t) => {
     a.deep(j.onGesture('Thumb_Up', 200), quiet);
     a.eq(j.done, 'pass');
     const k = createLivenessJudge('right_hand_up', { t0: 0 });
-    k.tick(5000);
-    a.deep(k.onHandUp('right', 5100), quiet, 'после fail pass нет:');
-    a.deep(k.onHandUp('left', 5100), quiet);
-    a.deep(k.tick(6000), quiet);
+    const end = G.livenessSec * 1000; // дедлайн из config, а не зашитые 5 с
+    k.tick(end);
+    a.deep(k.onHandUp('right', end + 100), quiet, 'после fail pass нет:');
+    a.deep(k.onHandUp('left', end + 100), quiet);
+    a.deep(k.tick(end + 1000), quiet);
     a.eq(k.done, 'fail');
   });
 
