@@ -907,6 +907,55 @@ export default function friendsTests(t) {
     a.deep(e.bus.of('guest:status').at(-1), { status: 'error', error: 'peer-unavailable' });
   });
 
+  t.test('гость: игрок пропал посреди раунда и не вернулся за 30 с, ставка возвращается и экран получает void', (a) => {
+    const timers = { q: [], setTimeout: (fn, ms) => timers.q.push({ fn, ms, live: true }), clearTimeout: (id) => id && (timers.q[id - 1].live = false) };
+    const bus = miniBus();
+    const wallet = createGuestWallet({ storage: memoryStorage() });
+    const { api, io } = createGuestCore({ bus, wallet, timers, rng: () => 0 });
+    const sent = [];
+    io.setPeerId('me1');
+    io.open({ send: (m) => sent.push(m) });
+    io.message({ t: 'start', challenge: { id: 'c1' }, bets: [{ id: 'peer:me1', amount: 10 }], you: { amount: 10 } });
+    a.eq(api.balance(), 90);
+    io.closed(); // связь оборвалась посреди раунда
+    a.eq(timers.q.length, 1);
+    a.eq(timers.q[0].ms, MONEY.friend.hostLostMs);
+    a.eq(MONEY.friend.hostLostMs, 30000);
+    a.eq(api.balance(), 90, 'сразу ставку не возвращаем: сеть могла моргнуть');
+    a.eq(bus.of('guest:msg').filter((m) => m.msg.t === 'void').length, 0);
+    timers.q[0].fn();
+    a.eq(api.balance(), 100, 'через 30 с ставка вернулась');
+    a.deep(bus.of('guest:msg').at(-1), { msg: { t: 'void', reason: 'left' } });
+    a.deep(bus.of('guest:wallet').at(-1), { balance: 100, delta: 10, reason: 'refund' });
+    io.message({ t: 'end', success: false, you: { amount: 10, delta: 9 } });
+    a.eq(api.balance(), 100, 'запоздавший итог возвращённое не рассчитывает');
+  });
+
+  t.test('гость: связь вернулась раньше срока, раунд не отменяется; без раунда и после итога таймера нет', (a) => {
+    const timers = { q: [], setTimeout: (fn, ms) => timers.q.push({ fn, ms, live: true }), clearTimeout: (id) => id && (timers.q[id - 1].live = false) };
+    const bus = miniBus();
+    const wallet = createGuestWallet({ storage: memoryStorage() });
+    const { api, io } = createGuestCore({ bus, wallet, timers });
+    io.setPeerId('me1');
+    io.open({ send() {} });
+    io.closed();
+    a.eq(timers.q.length, 0, 'раунда нет: ждать нечего');
+    io.open({ send() {} });
+    io.message({ t: 'start', challenge: { id: 'c1' }, bets: [{ id: 'peer:me1', amount: 5 }], you: { amount: 5 } });
+    io.closed();
+    a.eq(timers.q.length, 1);
+    io.open({ send() {} }); // игрок вернулся
+    a.ok(!timers.q[0].live, 'таймер снят');
+    a.eq(api.balance(), 95);
+    io.message({ t: 'end', success: true, you: { amount: 5, delta: -5 } });
+    io.closed();
+    a.eq(timers.q.length, 1, 'после итога раунда нет, таймер не заводим');
+    io.message({ t: 'start', challenge: { id: 'c2' }, bets: [{ id: 'peer:me1', amount: 5 }], you: { amount: 5 } });
+    io.closed({ left: true }); // друг сам закрыл страницу
+    a.eq(timers.q.length, 1, 'ушёл сам: возврат по таймеру не нужен, ставка вернётся при следующем заходе');
+    a.eq(bus.of('guest:msg').filter((m) => m.msg.reason === 'left').length, 0);
+  });
+
   // ── Боты и друзья ──
   t.test('боты: ссылки нет и друзей нет, ждать нечего', (a) => {
     a.eq(friendWait({ link: 'none', watching: 0, room: 10, amount: 5, waited: 0 }), 0);
