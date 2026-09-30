@@ -287,8 +287,9 @@ function walletTests(t) {
     a.ok(r.settlement.voided);
     a.deep(r.settlement.friends.map((f) => f.payout), [5, 5], 'друзьям вернули их ставки');
     a.eq(w.refund('camera', ch.id), null, 'второй возврат не делается');
-    a.eq(w.end(finished(ch, true)), null);
-    a.ok(w.settle(ch.id).settlement.voided, 'экран итогов увидит отмену');
+    a.ok(w.settle(ch.id).settlement.voided, 'по челленджу видно, что его отменили');
+    a.eq(w.end(finished(ch, true)), null, 'финиш после отмены ничего не меняет');
+    w.settle(ch.id);
     a.eq(w.balance, 100, 'после отмены выплат нет');
   });
 
@@ -300,6 +301,26 @@ function walletTests(t) {
     a.eq(w.refund('camera', ch.id), null);
     w.settle(ch.id);
     a.eq(w.balance, 109);
+  });
+
+  t.test('кошелёк: финиш без старта (клавиша во время отсчёта) не показывает прошлый расчёт', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge();
+    play(w, ch, true);
+    a.eq(w.end(finished(ch, false)), null, 'ставку в этот раз не списывали');
+    a.eq(w.settle(ch.id), null);
+    a.eq(w.balance, 109);
+    play(w, ch, false); // тот же челлендж ещё раз, уже по-настоящему
+    a.eq(w.balance, 99);
+  });
+
+  t.test('кошелёк: отмена до старта ничего не возвращает, потому что ничего не списано', (a) => {
+    const w = createWallet({ storage: memory() });
+    const seen = [];
+    w.subscribe((c) => seen.push(c.reason));
+    a.eq(w.refund('camera', challenge().id), null);
+    a.eq(w.balance, 100);
+    a.eq(seen.length, 0, 'фишка баланса не дёргается');
   });
 
   t.test('кошелёк: ставки против после старта не меняют расчёт (снимок на live:start)', (a) => {
