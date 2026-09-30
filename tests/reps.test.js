@@ -503,7 +503,7 @@ export default (t) => {
   t.test('приседания: никого в кадре: своя подсказка', (a) => {
     const s = setup(squat);
     s.feed(hold(null, 12));
-    a.eq(s.feedback.current?.text, 'Не вижу тебя, встань в кадр целиком');
+    a.eq(s.feedback.current?.text, 'Не вижу тебя: встань в кадр целиком и проверь свет');
   });
 
 
@@ -780,6 +780,75 @@ export default (t) => {
     q.feed(hold(pushupPose(TOP), 6));
     a.eq(q.feedback.current?.code, 'pushup_half_down');
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
+  });
+
+  // ─── Сустав у края кадра не виден; поза пропала посреди кадра: плохо видно ───
+  const shiftX = (lm, dx) => lm.map((p) => ({ ...p, x: p.x + dx }));
+  const EDGE_TEXT = 'Не видно ног: отойди дальше или поставь камеру ниже';
+  t.test('край кадра: щиколотки у самого низа = ноги не видны, хоть модель и уверена (visibility 0.95)', (a) => {
+    const at = (y) => squatPose({ ...STAND, override: { 27: { y }, 28: { y } } });
+    const s = setup(squat);
+    s.feed(hold(squatPose(STAND), 12));
+    s.feed(hold(at(0.985), 14)); // запас ещё больше 1%: видно
+    a.ok(s.feedback.current?.code !== 'visibility', 'у 98.5% подсказки про кадр нет');
+    s.feed(hold(at(0.997), 14)); // у самого края
+    a.eq(s.feedback.current?.text, EDGE_TEXT);
+    a.eq(s.feedback.current?.code, 'visibility');
+    a.deep(s.of('fault').filter((e) => e.code.startsWith('visibility')).map((e) => [e.code, e.label]), [['visibility_legs', 'не видно ног']]);
+    s.feed(hold(squatPose(STAND), 60)); // линия пола за это время возвращается на место
+    s.feed(rep(squatPose, STAND, DEEP, 2000));
+    a.eq(s.ctrl.count, 1, 'вернулся с запасом: счёт идёт');
+  });
+
+  t.test('край кадра: плечи сверху и таз у края, руки у отжиманий не в счёт', (a) => {
+    const s = setup(squat);
+    s.feed(hold(squatPose(STAND), 12));
+    s.feed(hold(squatPose({ ...STAND, override: { 11: { y: 0.004 }, 12: { y: 0.004 } } }), 14));
+    a.eq(s.feedback.current?.text, 'Не видно плеч: отойди или подними камеру');
+    const h = setup(squat);
+    h.feed(hold(squatPose(STAND), 12));
+    h.feed(hold(squatPose({ ...STAND, override: { 23: { x: 0.999 }, 24: { x: 0.999 } } }), 14));
+    a.eq(h.feedback.current?.text, 'Не весь корпус в кадре, отойди', 'таз у края: запасная фраза');
+    // отжимания: ступни у правого края = ноги, кисти у края (а над головой при махах тем более) = не причина
+    const p = setup(pushup);
+    p.feed(hold(pushupPose(TOP), 12));
+    p.feed(hold(pushupPose({ ...TOP, override: { 27: { x: 0.998 }, 28: { x: 0.998 } } }), 14));
+    a.eq(p.feedback.current?.text, EDGE_TEXT);
+    const w = setup(pushup);
+    w.feed(hold(pushupPose(TOP), 12));
+    w.feed(hold(pushupPose({ ...TOP, override: { 15: { x: 0.999 }, 16: { x: 0.999 }, 13: { y: 0.003 }, 14: { y: 0.003 } } }), 14));
+    a.ok(w.feedback.current?.code !== 'visibility', 'кисти и локти у края не считаем пропажей тела');
+  });
+
+  t.test('край кадра: ready говорит то же и подсказывает, что сделать', (a) => {
+    const s = setup(squat);
+    let r = s.probe(hold(squatPose({ ...STAND, override: { 27: { y: 0.997 }, 28: { y: 0.997 } } }), 2));
+    a.deep(byId(r), { body: false, side: false, stand: false });
+    a.eq(r.hint, EDGE_TEXT);
+    r = s.probe(hold(squatPose(STAND), 3));
+    a.eq(r.ok, true);
+  });
+
+  t.test('поза пропала посреди кадра (шум, темно): «Плохо видно», а не «встань в кадр»', (a) => {
+    const s = setup(squat);
+    s.feed(hold(squatPose(STAND), 12));
+    s.feed(hold(null, 14));
+    a.eq(s.feedback.current?.text, 'Плохо видно: добавь света или не стой спиной к окну');
+    a.deep(s.of('fault').map((e) => [e.code, e.label]), [['visibility_dark', 'плохо видно']]);
+    s.feed(hold(squatPose(STAND), 20));
+    s.feed(rep(squatPose, STAND, DEEP, 2000));
+    a.eq(s.ctrl.count, 1, 'поза вернулась: счёт идёт');
+  });
+
+  t.test('поза пропала у края кадра (ушёл): «Не вижу тебя: встань в кадр целиком и проверь свет»', (a) => {
+    const nearBottom = squatPose({ ...STAND, override: { 27: { y: 0.97 }, 28: { y: 0.97 } } });
+    for (const [label, pose] of [['ступни у нижнего края', nearBottom], ['у левого края', shiftX(squatPose(STAND), -0.45)], ['у правого края', shiftX(squatPose(STAND), 0.45)]]) {
+      const s = setup(squat);
+      s.feed(hold(pose, 12));
+      s.feed(hold(null, 14));
+      a.eq(s.feedback.current?.text, 'Не вижу тебя: встань в кадр целиком и проверь свет', label);
+      a.deep(s.of('fault').map((e) => e.code), ['visibility_nobody'], label);
+    }
   });
 
   // ─── Похвала за серию чистых повторов ───
@@ -1059,7 +1128,9 @@ export default (t) => {
     a.deep(r.checks.map((c) => [c.id, c.ok, c.hint ?? null]), [['body', true, null], ['side', false, 'Повернись боком к камере, так видно колени и спину'], ['stand', true, null]]);
     a.eq(r.hint, 'Повернись боком к камере, так видно колени и спину');
     r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, s.t);
-    a.eq(r.hint, 'Не вижу тебя, встань в кадр целиком');
+    a.eq(r.hint, 'Плохо видно: добавь света или не стой спиной к окну', 'позу видели посреди кадра и потеряли');
+    const nobody = setup(squat);
+    a.eq(nobody.ctrl.ready({ t: 0, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, 0).hint, 'Не вижу тебя: встань в кадр целиком и проверь свет', 'никого и не было');
     const p = setup(pushup);
     r = p.probe(hold(pushupPose({ ...TOP, ...hide(15, 16) }), 2));
     a.eq(r.hint, 'Не видно рук: поставь камеру сбоку');
@@ -1082,10 +1153,10 @@ export default (t) => {
     a.eq(s.of('rejected').length, 0);
   });
 
-  t.test('ролик: отжимания с разных ракурсов: 13, спереди счёт на паузе', (a) => {
+  t.test('ролик: отжимания с разных ракурсов: 12 (ноги у края кадра не считаем), спереди счёт на паузе', (a) => {
     const s = replayTrace('pushup-horizontal', pushup);
     if (!s) return;
-    a.eq(s.ctrl.count, 13);
+    a.eq(s.ctrl.count, 12); // было 13: в паре кадров ноги за краем кадра, теперь там подсказка «Не видно ног», а не тихий счёт
   });
 
   // ─── Итоги ───
