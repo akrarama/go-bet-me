@@ -3,7 +3,6 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, MONEY } from './config.js';
 const START_BALANCE = MONEY.startBalance;
 const configured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 const ACCOUNT_TIMEOUT_MS = 8000;
-const mark = (label) => console.log(`[время] ${label}: ${Math.round(performance.now())} мс от открытия страницы`);
 // Библиотека входа начинает качаться сразу при открытии страницы, а не когда дошли до формы.
 const supabaseLib = configured ? import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm') : null;
 supabaseLib?.catch(() => {});
@@ -30,7 +29,6 @@ export async function requireAccount() {
     showAccountLoadError();
     return true;
   }
-  mark('библиотека Supabase загружена');
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const gate = document.querySelector('#account-gate');
   let signUp = false;
@@ -65,7 +63,6 @@ export async function requireAccount() {
         return render(`Supabase не ответил вовремя. Проверь интернет и попробуй снова. (${err.message})`);
       }
       working = false;
-      mark('ответ Supabase на вход/регистрацию');
       if (result.error) return render(result.error.message);
       if (signUp && !result.data.session) return render('В Supabase отключи подтверждение email (Authentication → Sign In / Providers → Email) и зарегистрируйся снова.');
       try {
@@ -124,7 +121,6 @@ export async function requireAccount() {
       }).catch((err) => console.warn('[credits sync]', err));
       return persistQueue;
     };
-    mark('профиль готов');
     finish(); // только теперь main.js продолжает запуск: камера, экраны
   };
 
