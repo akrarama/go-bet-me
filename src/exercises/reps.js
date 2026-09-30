@@ -108,6 +108,7 @@ export const atEdge = (p, margin) => Boolean(p) && (p.x < margin || p.x > 1 - ma
  * armed(): человек уже занял позицию, только тогда «не видно» считается ошибкой (до этого он ещё встаёт в кадр).
  */
 export function createSight(def, { holds, fire, feedback, armed = () => true }) {
+  const WHY = { ...SEEN_WHY, ...(def.seenWhy ?? {}) }; // упражнение может заменить текст причины (турник: камера спереди)
   let why = 'other'; // причина, по которой тело не видно: ключ SEEN_WHY, по ней текст подсказки
   let whyNext = null; // новая причина ждёт, пока продержится REPS.fault.minMs (текст не мигает)
   let whySince = 0;
@@ -150,7 +151,7 @@ export function createSight(def, { holds, fire, feedback, armed = () => true }) 
         }
       }
       const edge = holds.update(VISIBILITY.code, !seen, t);
-      if ((edge === 'on' || switched) && armed()) fire(SEEN_WHY[why]);
+      if ((edge === 'on' || switched) && armed()) fire(WHY[why]);
       else if (edge === 'off') feedback?.clear(VISIBILITY.code);
     },
 
@@ -160,13 +161,13 @@ export function createSight(def, { holds, fire, feedback, armed = () => true }) 
     },
     /** Правило-причина (SEEN_WHY): code, label, hint. */
     get rule() {
-      return SEEN_WHY[why];
+      return WHY[why];
     },
     show() {
-      feedback?.hint(SEEN_WHY[why].hint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
+      feedback?.hint(WHY[why].hint, { code: VISIBILITY.code, priority: PRIORITY.visibility, level: 'warn', speak: true });
     },
     /** Текст подсказки для причины reason (галочка «тело в кадре» в ready). */
-    hintFor: (reason) => SEEN_WHY[reason].hint,
+    hintFor: (reason) => WHY[reason].hint,
   };
 }
 
@@ -331,6 +332,8 @@ export function describeRejected(reasons) {
  *   turn?(ev, cfg) → { rule, value } | null   разворот угла: полуповтор или мало глубины
  *   missDelayMs?           разворот засчитывается ошибкой через столько мс, если поза не сломалась (прыжок)
  *   tempo?(ev, cfg) → { rule, value } | null  конец повтора: темп
+ *   verify?(ev, cfg) → { rule, value } | null конец повтора: главное условие не выполнено, повтор не засчитан
+ *   seenWhy?: { arms: { ...SEEN_WHY.arms, hint } }  свои тексты «не видно» (турник снимают спереди, не сбоку)
  *   checks?: [{ id, text, hint, soft?, test(m, cfg, lm) }]  положение до старта («Встань в позицию»): те же условия, что gate
  *                          (soft: совет, старт не держит, например SIDE_CHECK)
  *                          отбрасывает кадр; text до 22 символов, hint: что сделать; «Всё тело в кадре» (body) добавляет ready сам
@@ -431,8 +434,14 @@ export function createRepController({ challenge, bus, feedback, debug }, def) {
 
   function handle(ev, t) {
     if (ev.type === 'rep') {
-      const clean = attempt.length === 0;
-      if (!clean) reject(attempt[0], t);
+      // Повтор дошёл до конца по углу, но упражнение знает, что главного не было (подбородок не над перекладиной):
+      // разовая подсказка и повтор в лог незасчитанных, как полуповтор
+      const miss = attempt.length === 0 ? def.verify?.(ev, cfg) : null;
+      const clean = attempt.length === 0 && !miss;
+      if (miss) {
+        once(miss.rule, miss.value);
+        reject(miss.rule, t, miss.value);
+      } else if (!clean) reject(attempt[0], t);
       else {
         c.count += 1;
         reps.push({ min: ev.min, downMs: ev.downMs });
