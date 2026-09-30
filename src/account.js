@@ -2,6 +2,11 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, MONEY } from './config.js';
 
 const START_BALANCE = MONEY.startBalance;
 const configured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const ACCOUNT_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms = ACCOUNT_TIMEOUT_MS) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Превышено время ожидания')), ms))]);
+}
 
 /** Username/password gate backed by Supabase Auth's email/password provider. */
 export async function requireAccount() {
@@ -9,7 +14,13 @@ export async function requireAccount() {
     showSetupMessage();
     return true;
   }
-  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+  let createClient;
+  try {
+    ({ createClient } = await withTimeout(import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')));
+  } catch {
+    showAccountLoadError();
+    return true;
+  }
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const gate = document.querySelector('#account-gate');
   let signUp = false;
@@ -34,22 +45,32 @@ export async function requireAccount() {
       // gives the user a username-only experience; email confirmation must be disabled.
       const email = `${username}@accounts.go-bet-me.invalid`;
       working = true; render();
-      const result = signUp
-        ? await supabase.auth.signUp({ email, password })
-        : await supabase.auth.signInWithPassword({ email, password });
+      let result;
+      try {
+        result = await withTimeout(signUp
+          ? supabase.auth.signUp({ email, password })
+          : supabase.auth.signInWithPassword({ email, password }));
+      } catch (err) {
+        working = false;
+        return render(`Supabase не ответил вовремя. Проверь интернет и попробуй снова. (${err.message})`);
+      }
       working = false;
       if (result.error) return render(result.error.message);
       if (signUp && !result.data.session) return render('В Supabase отключи подтверждение email (Authentication → Sign In / Providers → Email) и зарегистрируйся снова.');
-      await startSession(result.data.user, signUp ? username : null);
+      try {
+        await startSession(result.data.user, signUp ? username : null);
+      } catch (err) {
+        render(`База отвечает слишком долго. Обнови страницу и попробуй снова. (${err.message})`);
+      }
     };
   };
 
   const startSession = async (user, newUsername = null) => {
     if (!user) return render('Не удалось определить аккаунт. Войди ещё раз.');
-    let { data, error } = await supabase.from('profiles').select('credits, nickname').eq('id', user.id).maybeSingle();
+    let { data, error } = await withTimeout(supabase.from('profiles').select('credits, nickname').eq('id', user.id).maybeSingle());
     if (error) return render(`Ошибка базы: ${error.message}`);
     if (!data) {
-      const created = await supabase.from('profiles').insert({ id: user.id, nickname: newUsername, credits: START_BALANCE }).select('credits, nickname').single();
+      const created = await withTimeout(supabase.from('profiles').insert({ id: user.id, nickname: newUsername, credits: START_BALANCE }).select('credits, nickname').single());
       if (created.error) return render(`Не удалось создать профиль: ${created.error.message}`);
       data = created.data;
     }
@@ -67,7 +88,13 @@ export async function requireAccount() {
     badge.className = 'account-user';
     badge.innerHTML = `<span class="chip">${escapeHtml(data?.nickname || newUsername || 'Аккаунт')}</span><button type="button">Выйти</button>`;
     document.querySelector('#stage').append(badge);
-    badge.querySelector('button').onclick = async () => { await supabase.auth.signOut(); location.reload(); };
+    badge.querySelector('button').onclick = async () => {
+      const button = badge.querySelector('button');
+      button.disabled = true;
+      button.textContent = 'Выход…';
+      try { await withTimeout(supabase.auth.signOut({ scope: 'local' }), 2500); } catch (err) { console.warn('[account sign out]', err); }
+      location.reload();
+    };
     let persistQueue = Promise.resolve();
     window.__creditsSync = (balance) => {
       const value = Math.max(0, Number(balance) || 0);
@@ -80,14 +107,20 @@ export async function requireAccount() {
   };
 
   try {
-    const { data: { session }, error } = await supabase.auth.getSession();
+    const { data: { session }, error } = await withTimeout(supabase.auth.getSession());
     if (error) render(error.message);
     else if (session) await startSession(session.user);
     else render();
   } catch (err) {
-    render(`Не удалось подключиться к Supabase: ${err.message}`);
+    render(`Supabase отвечает слишком долго. Проверь интернет и обнови страницу. (${err.message})`);
   }
   return !gate.hidden;
+}
+
+function showAccountLoadError() {
+  const gate = document.querySelector('#account-gate');
+  gate.hidden = false;
+  gate.innerHTML = `<div class="account-card"><h1>Не удалось проверить аккаунт</h1><p>Supabase долго не отвечает. Проверь интернет и обнови страницу.</p><button type="button" onclick="location.reload()">Повторить</button></div>`;
 }
 
 function escapeHtml(value) {

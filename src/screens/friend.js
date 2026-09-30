@@ -537,9 +537,10 @@ const skeleton = () => `
             <button class="friend__btn" type="button" data-reload hidden>Обновить страницу</button>
           </div>
         </div>
-        <div class="friend__reactions" data-reactions>
-          ${REACTIONS.map((x, i) => `<button class="friend__react" type="button" data-react="${i}"><span class="friend__react-emoji">${x.emoji}</span><span class="friend__react-label">${esc(x.label)}</span></button>`).join('')}
-        </div>
+        <form class="friend__reactions" data-reactions>
+          <input class="friend__comment" data-comment maxlength="40" placeholder="Напиши комментарий…" aria-label="Комментарий игроку">
+          <button class="friend__send" type="submit">Отправить</button>
+        </form>
       </div>
     </section>
 
@@ -585,7 +586,7 @@ function collect(root) {
     lost: q('[data-lost]'), lostTitle: q('[data-lost-title]'), lostText: q('[data-lost-text]'), reload: q('[data-reload]'),
     timer: q('[data-timer]'), timerText: q('[data-timer-text]'), stake: q('[data-stake]'), feed: q('[data-feed]'),
     liveLabel: q('[data-live-label]'), counter: q('[data-counter]'), count: q('[data-count]'), target: q('[data-target]'), progress: q('[data-progress]'),
-    reactions: q('[data-reactions]'),
+    reactions: q('[data-reactions]'), comment: q('[data-comment]'),
     resEyebrow: q('[data-res-eyebrow]'), resTitle: q('[data-res-title]'), resDetail: q('[data-res-detail]'), resDelta: q('[data-res-delta]'),
     resLine: q('[data-res-line]'), resWallet: q('[data-res-wallet]'), resBalance: q('[data-res-balance]'),
     betBtns: {},
@@ -833,20 +834,23 @@ function wire(r) {
       });
     ctx.timeout(() => dispatch(r, { type: 'bet:timeout' }), BET_WAIT_MS);
   });
-  els.reactions.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-react]');
-    if (!btn || btn.disabled) return;
-    const reaction = REACTIONS[Number(btn.dataset.react)];
+  els.reactions.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = els.comment.value.trim();
+    if (!text || r.commentBusy) return;
     sound.play('click');
-    let sent = true;
-    try {
-      sent = r.guest?.react?.(reaction.text) !== false; // false: нет связи или слишком часто
-    } catch (err) {
-      console.warn('[friend] react', err);
-    }
-    btn.disabled = true;
-    if (sent) floatEmoji(btn, reaction.emoji);
-    ctx.timeout(() => (btn.disabled = false), REACT_GAP_MS);
+    let sent = false;
+    try { sent = r.guest?.react?.(text) !== false; } catch (err) { console.warn('[friend] react', err); }
+    if (!sent) return;
+    els.comment.value = '';
+    r.commentBusy = true;
+    els.comment.disabled = true;
+    els.reactions.querySelector('button[type="submit"]').disabled = true;
+    ctx.timeout(() => {
+      r.commentBusy = false;
+      els.comment.disabled = false;
+      els.reactions.querySelector('button[type="submit"]').disabled = false;
+    }, REACT_GAP_MS);
   });
   els.retry.addEventListener('click', () => retry(r));
   els.voidRetry.addEventListener('click', () => retry(r));
@@ -886,7 +890,7 @@ async function makeGuest(ctx, params) {
   if (ctx.debug.enabled && String(params.hostId ?? '').startsWith('demo')) return createStubGuest(ctx);
   try {
     const mod = await import('../friends/peer.js');
-    if (typeof mod.createGuest === 'function') return mod.createGuest({ hostId: params.hostId, bus: ctx.bus });
+    if (typeof mod.createGuest === 'function') return mod.createGuest({ hostId: params.hostId, bus: ctx.bus, name: params.guestName });
   } catch (err) {
     console.warn('[friend] friends/peer.js недоступен', err);
   }
@@ -914,6 +918,15 @@ export default {
     armTimers(r);
     paint(r);
 
+    if (!params.guest && !String(params.hostId ?? '').startsWith('demo')) {
+      let guestName = '';
+      try { guestName = localStorage.getItem('protiv:friend-name') || ''; } catch {}
+      guestName = window.prompt('Как тебя показывать в игре? Введи свой никнейм:', guestName) || guestName;
+      guestName = guestName.replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, MONEY.friend.nameMax);
+      if (!guestName) guestName = 'Друг';
+      params.guestName = guestName;
+      try { localStorage.setItem('protiv:friend-name', guestName); } catch {}
+    }
     const guest = await makeGuest(ctx, params);
     if (run !== r) return guest?.stop?.();
     await attach(r, guest);
@@ -969,7 +982,7 @@ export function createStubGuest(ctx) {
     const type = ['squat', 'pushup', 'meditation'][(round - 1) % 3];
     const def = CHALLENGES[type];
     challenge = { id: `demo-${round}`, type, target: def.defaultTarget, limitSec: def.limitSec, stake: 10 };
-    bets = [{ id: 'bot-dima', name: 'Дима', avatar: '🧔', amount: 5, bot: true }];
+    bets = [{ id: 'bot-anya', name: 'Аня', avatar: '👩‍🦰', amount: 5, bot: true }];
     left = challenge.stake - 5;
     mine = 0;
     stub.myBet = null;
