@@ -440,11 +440,150 @@ function walletTests(t) {
 
 // ─── Боты и лента (src/friends/bots.js) ──────────────────────────
 
-function botsTests(t) {}
+import { MONEY } from '../src/config.js';
+import { LINES, FAULT_LINES, fill, lineVars, pickLine, faultTheme, arrive } from '../src/friends/bots.js';
+
+const [DIMA, ANYA] = MONEY.bots;
+const templates = () => [...Object.values(LINES).flatMap((byType) => Object.values(byType).flat()), ...Object.values(FAULT_LINES).flat()];
+
+function botsTests(t) {
+  t.test('боты: реплики без тире и пустых подстановок, короткие', (a) => {
+    let n = 0;
+    for (const tpl of templates())
+      for (const bot of [DIMA, ANYA]) {
+        const s = fill(tpl, bot, lineVars(bot, { n: 5, left: 5, target: 10 }));
+        a.ok(!/[–—]/.test(s), `тире: ${s}`);
+        a.ok(!/[{}]|undefined|NaN/.test(s), `подстановка: ${s}`);
+        a.ok(s.length <= 45, `длинно (${s.length}): ${s}`);
+        n++;
+      }
+    a.ok(n > 150, 'реплик хватает');
+  });
+
+  t.test('боты: род бота в репликах и тостах', (a) => {
+    a.eq(fill('Я же говорил{а}!', DIMA), 'Я же говорил!');
+    a.eq(fill('Я же говорил{а}!', ANYA), 'Я же говорила!');
+    a.eq(arrive({ stake: 10, bets: [] }, DIMA).toast.text, 'Дима поставил 5 против тебя');
+    a.eq(arrive({ stake: 10, bets: [] }, ANYA).toast.text, 'Аня поставила 5 против тебя');
+    a.eq(fill('Спасибо за {credits}', DIMA, lineVars(DIMA)), 'Спасибо за 5 кредитов');
+  });
+
+  t.test('боты: сумма против не больше ставки, кто раньше, остальным «пул полон»', (a) => {
+    const small = { stake: 5, bets: [] };
+    a.eq(arrive(small, DIMA).status, 'ok');
+    const late = arrive(small, ANYA);
+    a.eq(late.status, 'full');
+    a.eq(late.toast.text, 'Аня хотела поставить 5, но пул уже полон');
+    a.eq(small.bets.length, 1);
+    const ten = { stake: 10, bets: [] };
+    a.deep([arrive(ten, DIMA).status, arrive(ten, ANYA).status], ['ok', 'ok']);
+    a.eq(arrive(ten, DIMA).status, 'repeat', 'второй раз тот же бот не ставит');
+    a.eq(arrive(ten, DIMA).toast, null);
+    const seven = { stake: 7, bets: [] };
+    arrive(seven, DIMA);
+    const trimmed = arrive(seven, ANYA);
+    a.eq(trimmed.status, 'trimmed');
+    a.eq(trimmed.bet.amount, 2);
+    a.eq(trimmed.toast.text, 'Аня поставила 2 против тебя, больше в пул не влезло');
+  });
+
+  t.test('боты: одна и та же реплика не звучит два раза подряд', (a) => {
+    const pool = ['раз', 'два', 'три'];
+    const used = [];
+    for (let i = 0; i < 30; i++) {
+      const line = pickLine(pool, () => (i * 0.37) % 1, used);
+      a.ok(line && line !== used[used.length - 1], `повтор: ${line}`);
+      used.push(line);
+    }
+    a.eq(pickLine([], Math.random, []), null);
+    a.eq(pickLine(['одна'], Math.random, ['одна']), null);
+  });
+
+  t.test('боты: подкол по теме ошибки (события блоков 1 и 4)', (a) => {
+    const cases = [
+      [{ code: 'knees_over_toes', text: 'Колени выходят за носки, сядь глубже назад', label: 'колени за носками' }, 'squat', 'knees'],
+      [{ code: 'squat_shallow', text: 'Недостаточная глубина: бедро выше колена, присядь ниже', label: 'недостаточная глубина' }, 'squat', 'depth'],
+      [{ code: 'pushup_half_down', text: 'Не до конца опускаешься: локоть 115°, нужно меньше 90°', label: 'недостаточная глубина' }, 'pushup', 'lower'],
+      [{ code: 'pushup_half_up', text: 'Не выпрямил руки: локоть 140°, нужно больше 160°', label: 'не выпрямил руки' }, 'pushup', 'straighten'],
+      [{ code: 'squat_half_up', text: 'Встань до конца, выпрями колени', label: 'не встал до конца' }, 'squat', 'straighten'],
+      [{ code: 'hip_sag', text: 'Таз провисает, напряги живот, выровняй тело', label: 'таз провис' }, 'pushup', 'hips'],
+      [{ code: 'torso_lean', text: 'Спина наклоняется вперёд, держи грудь, смотри перед собой', label: 'наклон спины вперёд' }, 'squat', 'back'],
+      [{ code: 'pushup_tempo', text: 'Слишком быстро, контролируй опускание', label: 'слишком быстро' }, 'pushup', 'tempo'],
+      [{ code: 'visibility', text: 'Не весь корпус в кадре, отойди', label: 'не весь корпус в кадре' }, 'squat', 'body'],
+      [{ code: 'eyes_open', text: 'Глаза открыты, закрой глаза' }, 'meditation', 'eyes'],
+      [{ code: 'head_moving', text: 'Голова двигается, замри' }, 'meditation', 'head'],
+      [{ code: 'face_lost', text: 'Лицо вышло из кадра, вернись' }, 'meditation', 'face'],
+      [{ code: 'two_faces', text: 'В кадре второй человек, ты должен быть один' }, 'meditation', 'second'],
+      [{ code: 'new_rule', text: 'Что-то новое' }, 'squat', null],
+    ];
+    for (const [fault, type, theme] of cases) a.eq(faultTheme(fault, type), theme, fault.code);
+  });
+}
 
 // ─── Экраны итогов (src/screens/result.js, src/screens/void.js) ──
 
-function screensTests(t) {}
+import { TEXT as RESULT_TEXT, shortLabel, faultItems, rejectedSummary, reasonText, ledgerRows } from '../src/screens/result.js';
+import { TEXT as VOID_TEXT, voidReason, refundRows } from '../src/screens/void.js';
+
+function screensTests(t) {
+  t.test('итоги: сводка незасчитанных, как в спеке', (a) => {
+    const depth = { code: 'squat_shallow', text: 'Недостаточная глубина: бедро выше колена, присядь ниже' };
+    a.eq(rejectedSummary([depth, depth, depth, { code: 'hip_sag', text: 'таз провис' }]), '4 незасчитанных: 3 × недостаточная глубина, 1 × таз провис');
+    a.eq(rejectedSummary([{ code: 'hip_sag', text: 'таз провис' }]), '1 незасчитанный: 1 × таз провис');
+    a.eq(rejectedSummary([]), '');
+    a.eq(rejectedSummary(undefined), '');
+  });
+
+  t.test('итоги: короткая подпись ошибки', (a) => {
+    a.eq(shortLabel('Колени выходят за носки, сядь глубже назад'), 'Колени выходят за носки');
+    a.eq(shortLabel('Недостаточная глубина: бедро выше колена, присядь ниже', { lower: true }), 'недостаточная глубина');
+    a.eq(shortLabel('Не выпрямил руки: локоть 140°, нужно больше 160°', { lower: true }), 'не выпрямил руки');
+    a.eq(shortLabel('глаза открыты'), 'глаза открыты');
+  });
+
+  t.test('итоги: ошибки чаще выше, нулевые не показываем', (a) => {
+    const items = faultItems([{ code: 'a', text: 'наклон спины вперёд', count: 1 }, { code: 'b', text: 'недостаточная глубина', count: 3 }, { code: 'c', text: 'x', count: 0 }]);
+    a.deep(items.map((i) => i.text), ['3 × недостаточная глубина', '1 × наклон спины вперёд']);
+  });
+
+  t.test('итоги: строка под заголовком', (a) => {
+    a.eq(reasonText({ success: true, reason: 'target' }), 'Цель выполнена');
+    a.eq(reasonText({ success: true, reason: 'forced-success' }), 'Цель выполнена');
+    a.eq(reasonText({ success: false, reason: 'time' }), 'Время вышло');
+    a.eq(reasonText({ success: false, reason: 'failed', type: 'meditation' }), 'Жизни закончились');
+    a.eq(reasonText({ success: false, reason: 'forced-fail' }), 'Челлендж провален');
+  });
+
+  t.test('итоги: расчёт по каждому участнику, сумма изменений 0', (a) => {
+    const rows = ledgerRows(settle({ stake: 20, bets: two5(), success: false, fee: 0.1 }), { reaction: (id) => (id === 'dima' ? 'Я же говорил!' : null) });
+    a.deep(rows.map((r) => r.kind), ['you', 'friend', 'friend', 'app']);
+    a.deep(rows.map((r) => r.delta), [-20, 4.5, 4.5, 11]);
+    a.eq(rows[1].quote, 'Я же говорил!');
+    a.eq(rows[2].quote, null);
+    a.eq(rows[3].detail, 'комиссия 10% и незакрытые 10 кр.');
+    a.eq(rows.reduce((sum, r) => sum + toCents(r.delta), 0), 0);
+    a.eq(ledgerRows(settle({ stake: 10, bets: [], success: true })).length, 1, 'соло: только игрок');
+  });
+
+  t.test('отмена: причина и кому что вернули', (a) => {
+    a.eq(voidReason('camera'), 'Камера пропала дольше чем на 5 секунд');
+    a.eq(voidReason('left'), 'Челлендж прервался');
+    a.deep(refundRows(refundAll({ stake: 10, bets: two5() })).map((r) => [r.name, r.back]), [['Ты', 10], ['dima', 5], ['anya', 5]]);
+  });
+
+  t.test('итоги и отмена: в текстах нет тире', (a) => {
+    const texts = [];
+    const walk = (v) => {
+      if (typeof v === 'string') texts.push(v);
+      else if (typeof v === 'function') texts.push(String(v(5, 'x')));
+      else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+    };
+    walk(RESULT_TEXT);
+    walk(VOID_TEXT);
+    a.ok(texts.length > 20);
+    for (const s of texts) a.ok(!/[–—]/.test(s), `тире: ${s}`);
+  });
+}
 
 export default (t) => {
   moneyTests(t);

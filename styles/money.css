@@ -78,7 +78,7 @@
 
 .result__title {
   margin: 0; font-family: var(--font-display); font-weight: 800;
-  font-size: clamp(52px, 7.6vw, 100px); line-height: 0.9; letter-spacing: -0.045em;
+  font-size: clamp(48px, 6.8vw, 88px); line-height: 0.9; letter-spacing: -0.045em;
   transform-origin: left center; animation: result-pop 0.7s var(--ease-spring) both;
 }
 .result.is-success .result__title { color: var(--accent); text-shadow: 0 0 48px var(--accent-glow); }
@@ -100,7 +100,7 @@
 .result__label { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 .result__faults { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .result__fault {
-  display: inline-flex; align-items: baseline; gap: 2px; padding: 7px 12px; border-radius: var(--r-pill);
+  display: inline-flex; align-items: baseline; gap: 6px; padding: 7px 12px; border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--danger) 14%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
   font-size: 15px; font-weight: 700; animation: result-rise 0.45s var(--ease-out) both; animation-delay: calc(0.3s + var(--i, 0) * 0.05s);
 }
@@ -175,37 +175,67 @@
 @keyframes result-pop { from { opacity: 0; transform: scale(1.18); } 60% { opacity: 1; } }
 @keyframes result-rise { from { opacity: 0; transform: translateY(10px); } }
 
-/* узко: одна колонка, всё плотнее */
+/* телефон: одна колонка, всё плотнее */
 @media (max-width: 820px) {
-  .result { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .screen--result,
+  .screen--void { padding-top: calc(var(--safe-t) + 64px); padding-bottom: calc(var(--safe-b) + 12px); }
+  .result,
+  .void { padding: 16px; }
+  .result { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .result__main,
-  .result__side { gap: 10px; }
-  .result__title { font-size: clamp(44px, 13vw, 64px); }
-  .ledger__row { padding-block: 7px; }
+  .result__side { gap: 8px; }
+  .result__title { font-size: clamp(40px, 12vw, 56px); }
+  .result__reason { margin: 0; font-size: 15px; }
+  .result__stat { padding: 8px 12px; }
+  .result__stat-value { font-size: 22px; }
+  .result__faults { margin-top: 6px; gap: 4px; }
+  .result__fault { padding: 4px 10px; font-size: 13px; }
+  .result__rejected { margin-top: 6px; font-size: 13px; }
+  .ledger { gap: 4px; }
+  .ledger__row { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; padding: 6px 12px 6px 7px; }
+  .ledger__avatar { width: 30px; height: 30px; font-size: 16px; }
+  .ledger__name { font-size: 15px; }
+  .ledger__amount { font-size: 18px; }
   .ledger__quote { display: none; }
+  .result__foot,
+  .void__foot { gap: 8px; padding-top: 10px; }
+  .balance-line__value { font-size: 28px; }
+  .wait-cta { min-height: 56px; }
 }
 
-/* низко (телефон боком, маленький ноутбук): ужимаем, чтобы влезло без прокрутки */
+/* невысокий экран: реплики друзей прячем, ошибки остаются сводкой незасчитанных */
 @media (max-height: 760px) {
   .screen--result,
-  .screen--void { padding-top: calc(var(--safe-t) + 64px); padding-bottom: calc(var(--safe-b) + 16px); }
-  .result,
-  .void { padding: 18px 22px; }
-  .result__main,
-  .result__side { gap: 10px; }
-  .result__stat { padding: 8px 12px; }
-  .ledger { gap: 4px; }
-  .ledger__row { padding-block: 5px; }
-  .ledger__avatar { width: 32px; height: 32px; font-size: 17px; }
-  .ledger__row { grid-template-columns: 32px minmax(0, 1fr) auto; }
-  .result__foot,
-  .void__foot { gap: 10px; padding-top: 10px; }
-  .wait-cta { min-height: 58px; }
-}
-@media (max-height: 520px) {
-  .result__title { font-size: 44px; }
-  .result__reason,
-  .ledger__detail,
+  .screen--void { padding-top: calc(var(--safe-t) + 64px); padding-bottom: calc(var(--safe-b) + 12px); }
   .ledger__quote { display: none; }
+}
+@media (max-width: 820px) and (max-height: 720px) {
+  .result__section:has(.result__rejected) > :not(.result__rejected),
+  .ledger__detail,
   .void__icon { display: none; }
+  .result__rejected { margin-top: 0; }
+}
+
+/* телефон боком: две колонки и только главное */
+@media (orientation: landscape) and (max-height: 520px) {
+  .screen--result,
+  .screen--void { padding-top: calc(var(--safe-t) + 56px); padding-bottom: calc(var(--safe-b) + 8px); }
+  .result { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .result,
+  .void { padding: 12px 16px; }
+  .result__title { font-size: 36px; }
+  .result__reason,
+  .result__label,
+  .ledger__detail,
+  .balance-line__label,
+  .void__icon,
+  .void__text { display: none; }
+  .result__section:has(.result__rejected) > :not(.result__rejected) { display: none; }
+  .result__stat { padding: 6px 10px; }
+  .result__stat-label { margin-bottom: 0; font-size: 12px; }
+  .result__stat-value { font-size: 20px; }
+  .ledger__row { grid-template-columns: 26px minmax(0, 1fr) auto; padding-block: 3px; }
+  .ledger__avatar { width: 26px; height: 26px; font-size: 14px; }
+  .balance-line__value { font-size: 24px; }
+  .wait-cta { min-height: 44px; }
 }

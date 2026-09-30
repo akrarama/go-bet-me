@@ -167,7 +167,7 @@ export function createController(deps) {
       const m = measure(a);
       return { ...m, rise: floor.update(feetY(a.lm, a.idx), a.t), front: view.update(m.span) };
     },
-    gate: (m) => (m.rise > cfg.jumpRise ? GATES.jump : !m.upright ? GATES.stand : m.front ? GATES.front : null),
+    gate: (m) => (m.rise > cfg.jumpRise && m.angle > cfg.jumpKneeMin ? GATES.jump : !m.upright ? GATES.stand : m.front ? GATES.front : null),
     rules: [RULES.kneesOverToes, RULES.lean],
     missDelayMs: cfg.missDelayMs,
     turn(ev) {
