@@ -1,12 +1,11 @@
 // Точка входа: камера, модели, экраны, отрисовка каждого кадра. Владелец: координатор.
 
 import * as config from './config.js';
-import { DEBUG, DEBUG_STATE, VISION, CHALLENGES, JOIN_ID } from './config.js';
+import { DEBUG, DEBUG_STATE, CHALLENGES, JOIN_ID } from './config.js';
 import { app, STATES } from './app.js';
 import { bus } from './bus.js';
 import { camera } from './camera.js';
 import { vision } from './vision/runner.js';
-import * as models from './vision/models.js';
 import { gestures } from './vision/gestures.js';
 import { draw } from './draw.js';
 import { feedback } from './feedback.js';
@@ -17,6 +16,7 @@ import { dwell } from './ui/dwell.js';
 import { wallet } from './wallet.js';
 import { bots } from './friends/bots.js';
 import { installHost } from './friends/peer.js';
+import { requireAccount } from './account.js';
 
 import idle from './screens/idle.js';
 import setup from './screens/setup.js';
@@ -97,6 +97,7 @@ function debugKeys() {
   debug.key('r', () => bus.emit('debug:count'), 'LIVE: +1 к счёту');
   debug.key('v', () => camera.freeze(), 'обрыв камеры вкл/выкл');
   debug.key(' ', () => (camera.video.paused ? camera.video.play() : camera.video.pause()), 'пауза видео');
+  debug.key('g', saveRecording, 'записать позу за 20 с в fixtures/traces');
   debug.key('t', () => {
     const types = Object.keys(CHALLENGES);
     const next = types[(types.indexOf(app.challenge.type) + 1) % types.length];
@@ -105,7 +106,33 @@ function debugKeys() {
   }, 'сменить тип челленджа');
 }
 
+// Запись позы для разбора (только ?debug=1): последние 20 с точек скелета, клавиша g сохраняет в
+// fixtures/traces/live-<время>.json (через tools/serve.py). Формат как у трасс роликов, t у каждого кадра.
+const REC_MS = 20000;
+const rec = [];
+let recLast = null;
+function record(frame) {
+  const pose = frame.pose;
+  if (!pose?.landmarks || pose.landmarks === recLast) return;
+  recLast = pose.landmarks;
+  const r4 = (v) => Math.round(v * 1e4) / 1e4;
+  rec.push({ t: Math.round(pose.t), w: frame.width, h: frame.height, lm: pose.landmarks.map((p) => [r4(p.x), r4(p.y), r4(p.z ?? 0), r4(p.visibility ?? 0)]) });
+  while (rec.length && rec[rec.length - 1].t - rec[0].t > REC_MS) rec.shift();
+}
+async function saveRecording() {
+  if (rec.length < 2) return ui.toast('Поза ещё не записана');
+  const span = (rec[rec.length - 1].t - rec[0].t) / 1000;
+  const name = `live-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`;
+  const data = {
+    input: { source: 'camera', type: app.challenge?.type, fps: Math.round(((rec.length - 1) / span) * 10) / 10, count: rec.length, width: rec[0].w, height: rec[0].h, seconds: span },
+    frames: rec.map((f) => ({ t: f.t, lm: f.lm })),
+  };
+  const res = await fetch(`/__save?path=fixtures/traces/${name}.json`, { method: 'POST', body: JSON.stringify(data) }).catch(() => null);
+  ui.toast(res?.ok ? `Записано: ${name} (${Math.round(span)} с)` : 'Не сохранилось: нужен tools/serve.py');
+}
+
 function onFrame(ctx, frame) {
+  if (DEBUG) record(frame);
   const screen = app.screen();
   screen?.frame?.(frame, ctx);
   draw.clear();
@@ -114,6 +141,8 @@ function onFrame(ctx, frame) {
 }
 
 async function boot() {
+  ui.loader.show('Проверяю аккаунт');
+  if (!JOIN_ID && await requireAccount()) return;
   const ctx = makeContext();
   app.init(ctx);
   for (const [name, screen] of Object.entries(SCREENS)) app.register(name, screen);
@@ -122,17 +151,9 @@ async function boot() {
   debug.mount($('#debug'));
   guardInput();
 
-  ui.loader.show('Включаю камеру');
-  try {
-    await camera.start($('#video'));
-  } catch (err) {
-    console.error(err);
-    return ui.fatal(...cameraError(err));
-  }
-  $('#stage').classList.toggle('is-mirrored', camera.mirror);
-  draw.resize();
-
-  ui.loader.show('Загружаю распознавание');
+  // Camera permission/startup and the first hand model are independent. Fetch them together
+  // so cold start takes the slower of the two instead of adding both delays.
+  ui.loader.show('Подключаю камеру и запускаю распознавание');
   const offProgress = bus.on('vision:progress', ({ model, loaded, total }) => {
     if (model !== 'gesture') return;
     if (total && loaded >= total) return ui.loader.show('Запускаю распознавание');
@@ -141,15 +162,26 @@ async function boot() {
   vision.onFrame((frame) => onFrame(ctx, frame));
   vision.start();
   vision.use('gesture');
+  const cameraReady = camera.start($('#video'));
+  const gestureReady = vision.ready('gesture');
+  gestureReady.catch(() => {}); // camera failure may return before the model promise is awaited
   try {
-    await vision.ready('gesture');
+    await cameraReady;
+  } catch (err) {
+    console.error(err);
+    offProgress();
+    return ui.fatal(...cameraError(err));
+  }
+  $('#stage').classList.toggle('is-mirrored', camera.mirror);
+  draw.resize();
+  try {
+    await gestureReady;
   } catch (err) {
     console.error(err);
     return ui.fatal('Распознавание не загрузилось', 'Проверь интернет и обнови страницу.');
   } finally {
     offProgress();
   }
-  models.preload(VISION.preload); // остальные модели в фоне
 
   gestures.start(ctx);
   dwell.start(ctx);

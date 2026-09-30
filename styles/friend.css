@@ -195,8 +195,18 @@
 
 .friend__reactions {
   position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b) + 20px);
-  display: flex; justify-content: center; gap: 10px; padding: 0 var(--gutter);
+  display: flex; justify-content: center; gap: 10px; padding: 0 var(--gutter); max-width: 620px; margin: 0 auto;
 }
+.friend__comment {
+  pointer-events: auto; flex: 1; min-width: 0; min-height: 54px; border: 1px solid var(--line-strong);
+  border-radius: var(--r); padding: 0 16px; color: var(--text); background: var(--surface-strong);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); font: inherit;
+}
+.friend__send {
+  pointer-events: auto; min-height: 54px; border: 0; border-radius: var(--r); padding: 0 18px;
+  color: var(--text); background: var(--surface-strong); font: inherit; font-weight: 800; cursor: pointer;
+}
+.friend__send:disabled { opacity: .55; cursor: default; }
 .friend__react {
   pointer-events: auto; appearance: none; position: relative; flex: 1 1 0; max-width: 150px; min-height: 68px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
@@ -254,13 +264,14 @@
   .friend__feed { left: auto; right: var(--gutter); width: min(360px, 34vw); padding: 0; justify-items: end; }
   .friend__fault { text-align: left; }
   .friend__reactions { left: auto; right: var(--gutter); padding: 0; gap: 12px; }
-  .friend__react { flex: none; width: 128px; }
+  .friend__comment { min-height: 48px; }
+  .friend__send { min-height: 48px; }
 }
 
 /* Слабые телефоны: размытие фона под чипами поверх идущего видео дорогое, а фон и так почти непрозрачный */
 .friend__view--live .chip,
 .friend__view--live .friend__fault,
-.friend__view--live .friend__react { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.friend__view--live .friend__comment, .friend__view--live .friend__send { backdrop-filter: none; -webkit-backdrop-filter: none; }
 .friend__view--live .chip { background: var(--surface-strong); }
 
 @media (prefers-reduced-motion: reduce) {

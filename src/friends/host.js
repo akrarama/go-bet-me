@@ -2,7 +2,8 @@
 // Про PeerJS не знает: peer.js отдаёт каждое соединение как link { send(msg), call(stream), close() },
 // поэтому тесты в jsc гоняют ядро с игрушечными link и своей шиной. Формат сообщений: protocol.js.
 //
-// Слушает шину: state, bet, live:start, count, fault, rejected, live:end, live:void.
+// Слушает шину: state, bet, stake:raised, live:start, count, fault, rejected, live:end, live:void.
+//   stake:raised {challenge, from, to}: игрок поднял свою ставку (пул был полон), друзьям уходит lobby с новым остатком.
 // Шлёт в шину: friend:join {id, name, avatar}, friend:leave {id}, bet {bet, challenge} (ставка друга,
 //   bet.id = 'peer:<id>', bot = false), bet:cancel {bet, challenge} (друг ушёл из LOBBY, его ставка снята),
 //   bet:withdrawn {bet, challenge, reason} (друг ушёл посреди LIVE: ставка выходит из расчёта, без выплаты и комиссии),
@@ -289,6 +290,11 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
     if (from === 'LIVE' && round && to !== 'VOID') onVoid({ reason: 'left' }); // ушли с LIVE, не доиграв (отладка)
   }
 
+  /** Игрок поднял ставку (stake:raised): в пуле появилось место, друзья получают lobby с новым остатком и ставкой. */
+  function onStakeRaised({ challenge } = {}) {
+    if (challenge?.id && challenge.id === app.challenge?.id) broadcastLobby();
+  }
+
   function onBusBet({ challenge } = {}) {
     if (challenge?.id && challenge.id === app.challenge?.id) broadcastLobby();
   }
@@ -312,6 +318,7 @@ export function createHostCore({ bus, app, getStream = () => null, toast = null,
   const offs = [
     bus.on('state', onState),
     bus.on('bet', onBusBet),
+    bus.on('stake:raised', onStakeRaised),
     bus.on('live:start', onStart),
     bus.on('count', onCount),
     bus.on('fault', forward('fault')),

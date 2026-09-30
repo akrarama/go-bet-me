@@ -42,6 +42,17 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* иначе display: flex/grid у классов перебивает hidden */
+.account-gate { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgba(5,5,7,.94); }
+.account-card { width: min(100%, 430px); padding: 30px; border: 1px solid var(--line); border-radius: var(--r-lg); background: #141418; box-shadow: var(--shadow); }
+.account-card h1 { margin: 0 0 10px; font: 800 27px var(--font-display); }
+.account-card p { color: var(--muted); line-height: 1.45; }
+.account-card form { display: grid; gap: 12px; margin-top: 22px; }
+.account-card input { width: 100%; padding: 14px; color: var(--text); background: #202026; border: 1px solid var(--line-strong); border-radius: 12px; font: inherit; }
+.account-card button { padding: 14px 18px; color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 12px; font: 800 15px var(--font-ui); cursor: pointer; }
+.account-card [data-switch] { margin-top: 14px; padding: 0; color: var(--text); background: transparent; text-decoration: underline; }
+.account-error { min-height: 1.4em; color: #ff8585 !important; }
+.account-user { position: absolute; top: calc(var(--safe-t) + 58px); left: var(--gutter); z-index: 7; display: flex; align-items: center; gap: 8px; }
+.account-user button { padding: 7px 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; }
 
 html,
 body {
@@ -253,6 +264,12 @@ body[data-state="LIVE"] .stage__scrim { background-color: rgba(10, 10, 12, 0); }
 }
 .position__hint { margin-top: 10px; color: var(--warn); font-weight: 700; font-size: 15px; line-height: 1.35; }
 .position__hint:empty { display: none; }
+/* Все обязательные ✓: под галочками уже не ошибка, а совет (мягкая галочка «Боком к камере») */
+.position.is-ready .position__hint { color: var(--muted); font-weight: 600; }
+.position__how { margin-top: 8px; color: var(--text); font-size: 15px; line-height: 1.4; }
+/* Мягкая галочка: совет, старт не держит. Пунктир вместо сплошной рамки и метка «совет» */
+.position__check.is-soft { border-style: dashed; }
+.position__soft { margin-left: 2px; padding: 1px 7px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 .position__hold { height: 4px; margin-top: 14px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .position__hold::before {
   content: ''; display: block; height: 100%; background: var(--accent); box-shadow: 0 0 12px var(--accent-glow);
@@ -321,7 +338,7 @@ body:not([data-state="LIVE"]) .feed { display: none; }
   .feed { left: auto; right: var(--gutter); width: min(72vw, 300px); top: calc(var(--safe-t) + 124px); bottom: auto; max-height: none; justify-content: flex-start; }
   .feed > :nth-last-child(n + 3) { display: none; }
   .position { top: calc(var(--safe-t) + 116px); padding: 14px 14px 12px; }
-  .position__place { font-size: 14px; }
+  .position__place, .position__how { font-size: 14px; }
   .position__check { font-size: 14px; padding: 7px 12px 7px 9px; }
 }
 

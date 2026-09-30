@@ -3,14 +3,19 @@
 // Каждый заход: новый челлендж (новый id, без ставок), прошлый выбор сохраняется.
 // Чистые помощники (plural, mss, targetLabel, stakeOptions, pickStake) без DOM: для тестов и других экранов.
 
-import { CHALLENGES, STAKES, MEDITATION, MONEY } from '../config.js';
+import { CHALLENGES, STAKES, MEDITATION, MONEY, GESTURES } from '../config.js';
+import { formatCredits } from '../money.js';
 import { esc } from '../ui.js';
 import { wallet } from '../wallet.js';
 import { gestures } from '../vision/gestures.js';
-import { setHold } from './idle.js';
+import { setHold, secText } from './idle.js';
 
-/** Русское множественное число: plural(5, 'повтор', 'повтора', 'повторов') → 'повторов'. */
+/**
+ * Русское множественное число: plural(5, 'повтор', 'повтора', 'повторов') → 'повторов'.
+ * Дробным числам нужна форма единственного числа в родительном падеже: «4,5 кредита», «0,5 секунды».
+ */
 export function plural(n, one, few, many) {
+  if (!Number.isInteger(n)) return few;
   const a = Math.abs(n) % 100;
   const b = a % 10;
   if (a > 10 && a < 20) return many;
@@ -99,6 +104,7 @@ export default {
               </button>`)
               .join('')}
             </div>
+            <p class="setup-desc" data-desc></p>
           </div>
           <div class="setup-row">
             <div class="setup-label">Цель<span class="setup-note" data-target-note></span></div>
@@ -111,7 +117,7 @@ export default {
         </div>
         <footer class="setup-foot">
           <button class="btn setup-back" data-dwell data-action="back"><span aria-hidden="true">👎</span> Назад</button>
-          <p class="setup-help">Наведи палец на кнопку и подержи секунду</p>
+          <p class="setup-help">Наведи палец на кнопку и подержи ${secText(GESTURES.dwellMs)}</p>
           <button class="btn btn--primary setup-next" data-dwell data-action="next">Дальше <span aria-hidden="true">👍</span></button>
         </footer>
       </section>`;
@@ -125,6 +131,7 @@ export default {
       targetNote: q('[data-target-note]'),
       stakes: q('[data-stakes]'),
       stakeNote: q('[data-stake-note]'),
+      desc: q('[data-desc]'),
       back: q('.setup-back'),
       next: q('.setup-next'),
     });
@@ -142,6 +149,7 @@ export default {
       els.targets.classList.toggle('is-fresh', fresh);
       mark(els.targets, 'target', c.target);
       els.targetNote.textContent = goalNote(c.type, def);
+      els.desc.textContent = def.howto ?? ''; // как выполнять: для отжиманий и планки «боком к камере»
     };
 
     const renderStakes = () => {
@@ -162,7 +170,7 @@ export default {
         els.stakeNote.textContent = opts.some((o) => o.disabled) ? 'Не хватает кредитов' : '';
       }
       els.next.disabled = none;
-      els.balance.innerHTML = `Баланс: <b>${wallet.balance}</b> кр.`;
+      els.balance.innerHTML = `Баланс <b>${formatCredits(wallet.balance)}</b> кр.`; // как в шапке: без двоеточия, дроби через запятую
     };
 
     const setType = (type) => {

@@ -2,7 +2,7 @@
 
 import { runSuites } from './harness.js';
 
-const SUITES = ['geometry', 'reps', 'gestures', 'money', 'meditation'];
+const SUITES = ['geometry', 'reps', 'exercises', 'gestures', 'money', 'meditation'];
 
 const inJsc = typeof document === 'undefined';
 const out = inJsc ? null : document.querySelector('#out');

@@ -38,6 +38,7 @@ export default {
           <div class="position__title position__title--wait">Встань в позицию</div>
           <div class="position__title position__title--ready">Отлично, замри</div>
           <div class="position__place">${esc(def.placement ?? '')}</div>
+          ${def.howto ? `<div class="position__how">${esc(def.howto)}</div>` : ''}
           <ul class="position__checks" data-checks></ul>
           <div class="position__hint" data-pos-hint></div>
           <div class="position__hold" aria-hidden="true"></div>
@@ -164,10 +165,11 @@ function checkPosition(r, frame) {
   if (key !== r.checksKey) {
     r.checksKey = key;
     r.els.checks.innerHTML = checks
-      .map((c) => `<li class="position__check${c.ok ? ' is-ok' : ''}"><span class="position__mark" aria-hidden="true"></span>${esc(c.text)}</li>`)
+      .map((c) => `<li class="position__check${c.ok ? ' is-ok' : ''}${c.soft ? ' is-soft' : ''}"><span class="position__mark" aria-hidden="true"></span>${esc(c.text)}${c.soft ? '<span class="position__soft">совет</span>' : ''}</li>`)
       .join('');
   }
-  const hint = res?.ok ? '' : String(res?.hint ?? ''); // что сделать для первой непройденной галочки
+  // что сделать для первой непройденной галочки; все обязательные ✓: совет по мягкой (боком к камере)
+  const hint = String((res?.ok ? res?.advice : res?.hint) ?? '');
   if (hint !== r.posHint) {
     r.posHint = hint;
     r.els.posHint.textContent = hint;

@@ -1,7 +1,7 @@
 // LOBBY: друзья ставят против (P0: боты), пул. Старт: рука над головой 1 с → LIVENESS. 👎 → SETUP.
 // Запасной старт, если рука не ловится: dwell-кнопка «Старт» (палец-курсор, 1 с).
 // P1: карточка приглашения друга (QR, ссылка, «Смотрят: N») по событию peer:ready, см. ui/invite.js.
-// peer:pending → карточка «Готовлю ссылку». Нет peer:ready или пришёл peer:error → карточки нет, всё как в P0.
+// peer:pending → карточка «Готовим ссылку». Нет peer:ready или пришёл peer:error → карточки нет, всё как в P0.
 // bet:cancel {bet, challenge}: друг ушёл из LOBBY, его строка уходит из списка, пул пересчитывается.
 // Владелец: блок 2 (Жесты). Ставки даёт блок 3: bots.join(challenge) и peer.js → событие bet.
 // Модели ['gesture', 'pose'] по очереди: палец-курсор и «рука вверх» одновременно.
@@ -16,6 +16,7 @@ import { sound } from '../sound.js';
 import { esc } from '../ui.js';
 import { invite, qrCached, qrFor, shortLink, betRow } from '../ui/invite.js';
 import { gestures, LIVENESS_TEXT } from '../vision/gestures.js';
+import { formatCredits } from '../money.js';
 import { goalChip, plural } from './setup.js';
 
 const HINTS = {
@@ -118,7 +119,7 @@ export default {
           <div class="lobby-chips">
             <span class="chip lobby-chip"><span class="lobby-chip__emoji" aria-hidden="true">${esc(def.emoji)}</span>${esc(def.label)}</span>
             <span class="chip lobby-chip">${esc(goal)}</span>
-            <span class="chip lobby-chip lobby-chip--you">Твоя ставка <b>${ch.stake} кр.</b></span>
+            <span class="chip lobby-chip lobby-chip--you">Твоя ставка <b>${formatCredits(ch.stake)} кр.</b></span>
           </div>
           <div class="lobby-bets-wrap">
             <h3 class="lobby-title">Против тебя</h3>
@@ -170,13 +171,13 @@ export default {
         `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}${still ? ' is-still' : ''}" data-bet="${esc(r.id)}" style="--i: ${i}">
           <span class="lobby-bet__avatar" aria-hidden="true">${esc(r.avatar)}</span>
           <span class="lobby-bet__who"><span class="lobby-bet__name">${esc(r.name)}</span>${r.link ? '<span class="lobby-bet__tag">по ссылке</span>' : ''}</span>
-          <span class="lobby-bet__amount">${r.amount} кр.</span>
+          <span class="lobby-bet__amount">${formatCredits(r.amount)} кр.</span>
         </li>`,
       );
     };
     const renderPool = () => {
       const pool = ch.bets.reduce((s, b) => s + b.amount, 0);
-      v.pool.innerHTML = `Против: <b>${pool}</b> из ${ch.stake} кр.`;
+      v.pool.innerHTML = `Против: <b>${formatCredits(pool)}</b> из ${formatCredits(ch.stake)} кр.`;
       v.meter.style.setProperty('--fill', ch.stake ? Math.min(1, pool / ch.stake) : 0);
       const full = pool >= ch.stake;
       if (full && v.full.hidden && still) v.full.classList.add('is-still'); // «пул полон» уже был до проверки
@@ -245,7 +246,7 @@ export default {
             <div class="invite-qr" data-qr></div>
             <div class="invite-body">
               <h3 class="lobby-title">Позови друга</h3>
-              <p class="invite-text">Готовлю ссылку для друга<span class="lobby-dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+              <p class="invite-text">Готовим ссылку для друга<span class="lobby-dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
             </div>`;
         } else {
           const url = key;
@@ -255,8 +256,29 @@ export default {
               <h3 class="lobby-title">Позови друга</h3>
               <p class="invite-text">Друг наводит камеру на QR и ставит против</p>
               <p class="invite-link">${esc(shortLink(url))}</p>
+              <button class="invite-copy" type="button" data-copy-invite>Скопировать ссылку</button>
               <p class="invite-watch" data-watch aria-live="polite"></p>
             </div>`;
+          v.invite.querySelector('[data-copy-invite]').addEventListener('click', async () => {
+            try {
+              if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(url);
+              } else {
+                const field = document.createElement('textarea');
+                field.value = url;
+                field.style.position = 'fixed';
+                field.style.opacity = '0';
+                document.body.append(field);
+                field.select();
+                const copied = document.execCommand('copy');
+                field.remove();
+                if (!copied) throw new Error('Clipboard unavailable');
+              }
+              ctx.ui.toast('Ссылка скопирована');
+            } catch {
+              ctx.ui.toast('Не удалось скопировать. Скопируй ссылку вручную из карточки.');
+            }
+          });
           const hit = qrCached(url);
           if (hit) setQr(hit);
           else qrFor(url).then((svg) => view === v && v.inviteKey === url && setQr(svg));

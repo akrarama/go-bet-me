@@ -4,6 +4,7 @@
 
 import { camera } from './camera.js';
 import { VISION } from './config.js';
+import { createLandmarkSmoother, nearSide } from './vision/smooth.js';
 
 const POSE_BONES = [
   [11, 12], [11, 13], [13, 15], [15, 19], [12, 14], [14, 16], [16, 20],
@@ -12,6 +13,11 @@ const POSE_BONES = [
   [24, 26], [26, 28], [28, 30], [30, 32], [28, 32],
 ];
 const POSE_JOINTS = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 31, 32];
+const LEFT = new Set([11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]);
+const RIGHT = new Set([12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]);
+// Сглаженный скелет на результат модели: rAF рисует чаще, чем модель отдаёт кадры, фильтр шагает по времени результата
+const smoother = createLandmarkSmoother();
+let smoothed = { src: null, lm: null };
 const HAND_BONES = [
   [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
   [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [0, 17], [17, 18], [18, 19], [19, 20],
@@ -67,14 +73,24 @@ export const draw = {
   auto(frame, { highlight } = {}) {
     const fresh = (r) => r && frame.t - r.t <= VISION.staleMs;
     if (fresh(frame.face)) this.face(frame.face.faces);
-    if (fresh(frame.pose) && frame.pose.landmarks) this.pose(frame.pose.landmarks, { highlight });
+    if (fresh(frame.pose) && frame.pose.landmarks) this.pose(this.smoothPose(frame.pose), { highlight });
     if (fresh(frame.gesture)) this.hands(frame.gesture.hands);
+  },
+
+  /** Точки позы после One Euro (для экрана). Один и тот же результат модели фильтруется один раз. */
+  smoothPose(pose) {
+    if (smoothed.src !== pose.landmarks) smoothed = { src: pose.landmarks, lm: smoother.smooth(pose.landmarks, pose.t) };
+    return smoothed.lm;
   },
 
   pose(lm, { highlight = new Set(), minVisibility = 0.5 } = {}) {
     const c = this.ctx;
     const P = lm.map((p) => this.project(p));
-    const vis = (i) => lm[i].visibility ?? 1;
+    // В профиль дальние рука и нога закрыты телом, модель их угадывает и они прыгают: рисуем их бледно и тонко
+    const near = nearSide(lm);
+    const farSet = near === 'left' ? RIGHT : near === 'right' ? LEFT : null;
+    const far = (i) => Boolean(farSet?.has(i));
+    const vis = (i) => (far(i) ? 0 : lm[i].visibility ?? 1);
     const pulse = (Math.sin(performance.now() / 140) + 1) / 2;
     c.save();
     c.lineCap = 'round';
@@ -83,7 +99,7 @@ export const draw = {
     for (const [a, b] of POSE_BONES) {
       const bad = highlight.has(a) || highlight.has(b);
       c.strokeStyle = bad ? COLORS.bad : Math.min(vis(a), vis(b)) < minVisibility ? COLORS.dim : COLORS.bone;
-      c.lineWidth = bad ? 7 : 5;
+      c.lineWidth = bad ? 7 : far(a) || far(b) ? 3 : 5;
       c.beginPath();
       c.moveTo(P[a].x, P[a].y);
       c.lineTo(P[b].x, P[b].y);
@@ -100,7 +116,7 @@ export const draw = {
       }
       c.fillStyle = bad ? COLORS.bad : vis(i) < minVisibility ? COLORS.dim : COLORS.joint;
       c.beginPath();
-      c.arc(x, y, bad ? 9 : i === 0 ? 5 : 6, 0, Math.PI * 2);
+      c.arc(x, y, bad ? 9 : i === 0 ? 5 : far(i) ? 4 : 6, 0, Math.PI * 2);
       c.fill();
     }
     c.restore();

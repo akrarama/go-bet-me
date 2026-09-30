@@ -1,0 +1,384 @@
+// Тесты новых упражнений: брусья, турник, берпи. Настоящие ролики (fixtures/traces, в git не лежат,
+// трассы сняты моделью full через tests/replay.html) и синтетика там, где ролика не хватает.
+
+import * as dips from '../src/exercises/dips.js';
+import * as pullup from '../src/exercises/pullup.js';
+import * as burpee from '../src/exercises/burpee.js';
+import * as pushup from '../src/exercises/pushup.js';
+import * as plank from '../src/exercises/plank.js';
+import { faultTheme, poolFor } from '../src/friends/bots.js';
+import { streakText } from '../src/screens/result.js';
+import { CHALLENGES } from '../src/config.js';
+
+/** Контроллер с журналом шины и тихим feedback. */
+export function setup(mod, { target = 999, options } = {}) {
+  const events = [];
+  const hints = [];
+  const bus = { emit: (type, p) => events.push({ type, ...p }) };
+  const feedback = {
+    highlight: new Set(),
+    hint: (text, o = {}) => hints.push({ text, code: o.code }),
+    clear() {},
+    clearNow() {},
+    say() {},
+  };
+  const debug = { enabled: false, set() {}, key() {} };
+  const ctrl = mod.createController({ challenge: { target }, bus, feedback, debug, ...(options ? { options } : {}) });
+  const of = (type) => events.filter((e) => e.type === type);
+  return { ctrl, events, hints, of };
+}
+
+/** Трасса ролика → контроллер; null, если трассы нет (в браузере или без fixtures). */
+export function replay(name, mod, opts) {
+  let data = null;
+  try {
+    data = typeof readFile === 'function' ? JSON.parse(readFile(`../fixtures/traces/${name}.json`)) : null;
+  } catch {
+    data = null;
+  }
+  if (!data) return null;
+  const s = setup(mod, opts);
+  const { fps, width, height } = data.input;
+  data.frames.forEach((f, i) => {
+    const t = 1 + (i * 1000) / fps;
+    const raw = Array.isArray(f) ? f : f?.lm;
+    const lm = raw ? raw.map(([x, y, z, visibility]) => ({ x, y, z, visibility })) : null;
+    if (i === 0) s.ctrl.start(t);
+    s.ctrl.frame({ t, ran: 'pose', width, height, pose: { t, landmarks: lm } }, t);
+  });
+  return s;
+}
+
+const codes = (s, type) => s.of(type).map((e) => e.code);
+
+// ─── Синтетика: 33 точки, кадр квадратный (aspect 1), 30 fps ───
+const FPS = 30;
+const rad = (d) => (d * Math.PI) / 180;
+const blank = () => Array.from({ length: 33 }, () => ({ x: 0.5, y: 1.3, z: 0, visibility: 0.1 }));
+const put = (lm, i, p, visibility = 0.95) => (lm[i] = { x: p.x, y: p.y, z: 0, visibility });
+
+/**
+ * Вис на турнике спереди: кисти на перекладине (y 0.2), угол локтя elbow. chin: нос относительно плеч
+ * (0.12 выше плеч = подбородок над перекладиной вверху; 0.07 = не дотянулся). arms: 'up' (вис) | 'down' (стоит).
+ */
+function hangPose({ elbow = 170, noseAbove = 0.12, arms = 'up' } = {}) {
+  const lm = blank();
+  const a = 0.15;
+  const d = a * Math.sqrt(2 - 2 * Math.cos(rad(elbow))); // плечо-запястье
+  const h = Math.sqrt(Math.max(0, a * a - (d / 2) ** 2)); // локоть в сторону от линии плечо-запястье
+  for (const [sh, el, wr, sx] of [[11, 13, 15, 0.4], [12, 14, 16, 0.6]]) {
+    const out = sx < 0.5 ? -1 : 1;
+    if (arms === 'up') {
+      const W = { x: sx, y: 0.2 };
+      const S = { x: sx, y: 0.2 + d };
+      put(lm, wr, W);
+      put(lm, sh, S);
+      put(lm, el, { x: sx + out * h, y: 0.2 + d / 2 });
+    } else {
+      const S = { x: sx, y: 0.45 };
+      put(lm, sh, S);
+      put(lm, el, { x: sx + out * h, y: S.y + d / 2 });
+      put(lm, wr, { x: sx, y: S.y + d });
+    }
+  }
+  put(lm, 0, { x: 0.5, y: lm[11].y - noseAbove });
+  return lm;
+}
+
+/** Брусья сбоку: плечо (0.5, 0.35), корпус наклонён на lean, предплечье вертикально, угол локтя elbow. */
+function dipsPose({ elbow = 165, lean = 20 } = {}) {
+  const lm = blank();
+  const S = { x: 0.5, y: 0.35 };
+  const phi = rad(180 - elbow);
+  const E = { x: S.x - 0.15 * Math.sin(phi), y: S.y + 0.15 * Math.cos(phi) };
+  const W = { x: E.x, y: E.y + 0.15 };
+  const H = { x: S.x - 0.3 * Math.sin(rad(lean)), y: S.y + 0.3 * Math.cos(rad(lean)) };
+  [[11, S], [13, E], [15, W], [23, H]].forEach(([i, p]) => put(lm, i, p));
+  [[12, S], [14, E], [16, W], [24, H]].forEach(([i, p]) => put(lm, i, { x: p.x + 0.01, y: p.y }, 0.55));
+  put(lm, 0, { x: S.x + 0.03, y: S.y - 0.1 });
+  return lm;
+}
+
+/** Кадры повтора: верх держится hold кадров, вниз и вверх за ms. make(angle) → поза. */
+function reps(n, make, top, bottom, { ms = 1600, hold = 12 } = {}) {
+  const out = [];
+  const half = Math.round(((ms / 2) * FPS) / 1000);
+  for (let r = 0; r < n; r++) {
+    for (let i = 0; i < hold; i++) out.push(make(top));
+    for (let i = 1; i <= half; i++) out.push(make(top + ((bottom - top) * i) / half));
+    for (let i = 1; i <= half; i++) out.push(make(bottom + ((top - bottom) * i) / half));
+  }
+  for (let i = 0; i < hold; i++) out.push(make(top));
+  return out;
+}
+
+function feed(s, frames) {
+  frames.forEach((lm, i) => {
+    const t = 1 + (i * 1000) / FPS;
+    if (i === 0) s.ctrl.start(t);
+    s.ctrl.frame({ t, ran: 'pose', width: 1000, height: 1000, pose: { t, landmarks: lm } }, t);
+  });
+  return s;
+}
+
+export default (t) => {
+  // ─── Турник ───
+  t.test('турник: подбородок над перекладиной, 3 повтора засчитаны', (a) => {
+    const s = feed(setup(pullup), reps(3, (e) => hangPose({ elbow: e }), 170, 45));
+    a.eq(s.ctrl.count, 3);
+    a.eq(s.of('rejected').length, 0);
+  });
+
+  t.test('турник: подбородок не дошёл до перекладины, повтор в лог «подбородок ниже перекладины»', (a) => {
+    const s = feed(setup(pullup), reps(2, (e) => hangPose({ elbow: e, noseAbove: 0.07 }), 170, 45));
+    a.eq(s.ctrl.count, 0);
+    a.deep(codes(s, 'rejected'), ['pullup_chin', 'pullup_chin']);
+    a.ok(s.hints.some((h) => /перекладин/.test(h.text)), 'подсказка про перекладину');
+  });
+
+  t.test('турник: стоит, руки внизу сгибаются, счёт на паузе с подсказкой «повисни»', (a) => {
+    const s = feed(setup(pullup), reps(3, (e) => hangPose({ elbow: e, arms: 'down' }), 170, 45));
+    a.eq(s.ctrl.count, 0);
+    a.ok(s.hints.some((h) => /Повисни/.test(h.text)), 'подсказка «Повисни на турнике»');
+  });
+
+  t.test('турник: не подтянулся (локоть 110°), глубина в лог', (a) => {
+    const s = feed(setup(pullup), reps(1, (e) => hangPose({ elbow: e }), 170, 110));
+    a.eq(s.ctrl.count, 0);
+    a.deep(codes(s, 'rejected'), ['pullup_half_down']);
+  });
+
+  t.test('турник: ready: вис ✓, стоя ✗ с подсказкой', (a) => {
+    const s = setup(pullup);
+    let r = s.ctrl.ready({ t: 1, width: 1000, height: 1000, pose: { t: 1, landmarks: hangPose() } }, 1);
+    a.eq(r.ok, true);
+    r = s.ctrl.ready({ t: 40, width: 1000, height: 1000, pose: { t: 40, landmarks: hangPose({ arms: 'down' }) } }, 40);
+    a.eq(r.ok, false);
+    a.ok(/Повисни/.test(r.hint), r.hint);
+  });
+
+  // ─── Брусья ───
+  t.test('брусья: 3 чистых повтора', (a) => {
+    const s = feed(setup(dips), reps(3, (e) => dipsPose({ elbow: e }), 165, 90));
+    a.eq(s.ctrl.count, 3);
+    a.eq(s.of('rejected').length, 0);
+  });
+
+  t.test('брусья: корпус завален вперёд, повтор не засчитан, подсказка про грудь', (a) => {
+    const s = feed(setup(dips), reps(2, (e) => dipsPose({ elbow: e, lean: 58 }), 165, 90));
+    a.eq(s.ctrl.count, 0);
+    a.deep(codes(s, 'rejected'), ['dips_lean', 'dips_lean']);
+    a.ok(s.hints.some((h) => /грудь/.test(h.text)));
+  });
+
+  t.test('брусья: мелко (локоть 120°), глубина в лог', (a) => {
+    const s = feed(setup(dips), reps(1, (e) => dipsPose({ elbow: e }), 165, 120));
+    a.eq(s.ctrl.count, 0);
+    a.deep(codes(s, 'rejected'), ['dips_half_down']);
+  });
+
+  t.test('брусья: упор лёжа на полу (корпус горизонтально) не считается', (a) => {
+    const s = feed(setup(dips), reps(2, (e) => dipsPose({ elbow: e, lean: 85 }), 165, 90));
+    a.eq(s.ctrl.count, 0);
+  });
+
+  // ─── Берпи: машина фаз на метриках кадра ───
+  const STAND = { knee: 172, elbow: 170, tilt: 84, handsDown: false, armsUp: false, ankleY: 0.9 };
+  const CROUCH = { knee: 90, elbow: 170, tilt: 30, handsDown: true, armsUp: false, ankleY: 0.9 };
+  const PLANK = { knee: 170, elbow: 170, tilt: 10, handsDown: true, armsUp: false, ankleY: 0.9 };
+  const BENT = { ...PLANK, elbow: 85 };
+  const JUMP = { ...STAND, ankleY: 0.8 };
+  const ARMS_UP = { ...STAND, armsUp: true };
+  const n = (m, k) => Array(k).fill(m); // k кадров по 33 мс
+  const circle = ({ pushups = 1, jump = JUMP, plank = true } = {}) => [
+    ...n(CROUCH, 8),
+    ...(plank ? n(PLANK, 8) : []),
+    ...(plank ? Array.from({ length: pushups }, () => [...n(BENT, 8), ...n(PLANK, 8)]).flat() : []),
+    ...n(CROUCH, 8),
+    ...n(STAND, 3),
+    ...(jump ? n(jump, 6) : []),
+    ...n(STAND, 40), // дольше окна прыжка
+  ];
+  const run = (frames, opts) => {
+    const cyc = burpee.createCycle(undefined, opts);
+    return frames.flatMap((m, i) => cyc.update(m, i * 33.3));
+  };
+  const got = (ev) => ev.filter((e) => e.type === 'rep' || e.type === 'miss').map((e) => (e.type === 'rep' ? 'rep' : e.rule.code));
+
+  t.test('берпи: три полных круга из положения стоя = 3 повтора', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle(), ...circle(), ...circle()])), ['rep', 'rep', 'rep']);
+  });
+
+  t.test('берпи: без отжимания круг не засчитан, подсказка уже при выходе из упора', (a) => {
+    const ev = run([...n(STAND, 15), ...circle({ pushups: 0 })]);
+    a.deep(got(ev), ['burpee_no_pushup']);
+    a.ok(ev.some((e) => e.type === 'warn' && e.rule.code === 'burpee_no_pushup'));
+  });
+
+  t.test('берпи: без прыжка круг не засчитан', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ jump: null })])), ['burpee_no_jump']);
+  });
+
+  t.test('берпи: присел и встал без упора лёжа = «не было упора лёжа»', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ plank: false })])), ['burpee_no_plank']);
+  });
+
+  t.test('берпи: два отжимания в одном круге = один повтор; прыжок с руками вверх тоже прыжок', (a) => {
+    a.deep(got(run([...n(STAND, 15), ...circle({ pushups: 2 }), ...circle({ jump: ARMS_UP })])), ['rep', 'rep']);
+  });
+
+  t.test('берпи: пока человек не постоял, круги не считаются (начал из упора)', (a) => {
+    a.deep(got(run([...circle().slice(0, 40)])), []);
+  });
+
+  // ─── Лёжа на полу это не упор лёжа (отжимания, планка, берпи) ───
+  /**
+   * Сбоку, кадр квадратный. Ноги (таз, колено, щиколотка) на линии пола y 0.8.
+   * lying: плечо тоже на полу, руки вытянуты вперёд по полу, локоть приподнят так, что угол локтя = elbow.
+   * иначе упор: запястье под плечом на полу, плечо поднято руками (угол локтя = elbow).
+   */
+  function floorPose({ elbow = 170, lying = false } = {}) {
+    const lm = blank();
+    const W = lying ? { x: 0.12, y: 0.8 } : { x: 0.3, y: 0.8 };
+    let S;
+    let E;
+    if (lying) {
+      S = { x: 0.3, y: 0.79 };
+      const half = (S.x - W.x) / 2;
+      E = { x: W.x + half, y: 0.8 - half / Math.tan(rad(elbow / 2)) };
+    } else {
+      const a = 0.12;
+      const d = a * Math.sqrt(2 - 2 * Math.cos(rad(elbow)));
+      S = { x: 0.3, y: 0.8 - d };
+      E = { x: 0.3 - Math.sqrt(Math.max(0, a * a - (d / 2) ** 2)), y: 0.8 - d / 2 };
+    }
+    const legs = { hip: { x: 0.55, y: lying ? 0.8 : (S.y + 0.8) / 2 + 0.01 }, knee: { x: 0.7, y: lying ? 0.8 : 0.8 - (0.8 - S.y) * 0.25 }, ankle: { x: 0.86, y: 0.8 } };
+    [[11, S], [13, E], [15, W], [23, legs.hip], [25, legs.knee], [27, legs.ankle], [29, { x: 0.88, y: 0.8 }], [31, { x: 0.9, y: 0.79 }]].forEach(([i, p]) => put(lm, i, p));
+    [[12, S], [14, E], [16, W], [24, legs.hip], [26, legs.knee], [28, legs.ankle], [30, { x: 0.88, y: 0.8 }], [32, { x: 0.9, y: 0.79 }]].forEach(([i, p]) => put(lm, i, { x: p.x + 0.01, y: p.y - 0.005 }, 0.55));
+    put(lm, 0, { x: S.x - 0.06, y: S.y - 0.03 });
+    return lm;
+  }
+  const readyOf = (mod, lm) => {
+    const s = setup(mod);
+    let r = null;
+    for (let i = 0; i < 10; i++) r = s.ctrl.ready({ t: 1 + i * 33, width: 1000, height: 1000, pose: { t: 1 + i * 33, landmarks: lm } }, 1 + i * 33);
+    return r;
+  };
+
+  t.test('упор лёжа: руки держат тело ✓, лёжа на полу ✗ с подсказкой «поднимись на руки»', (a) => {
+    for (const mod of [pushup, plank]) {
+      const up = readyOf(mod, floorPose());
+      a.eq(up.checks.find((c) => c.id === 'plank').ok, true, 'в упоре');
+      const down = readyOf(mod, floorPose({ lying: true }));
+      a.eq(down.checks.find((c) => c.id === 'plank').ok, false, 'лёжа');
+      a.eq(down.ok, false);
+      a.ok(/лежишь/.test(down.hint), `подсказка: ${down.hint}`);
+    }
+  });
+
+  t.test('отжимания: лёжа на полу «качает» руками, повторы не считаются; в упоре те же углы считаются', (a) => {
+    const lying = feed(setup(pushup), reps(3, (e) => floorPose({ elbow: e, lying: true }), 165, 80));
+    a.eq(lying.ctrl.count, 0);
+    a.ok(lying.hints.some((h) => /лежишь/.test(h.text)), 'подсказка «поднимись на руки»');
+    const real = feed(setup(pushup), reps(3, (e) => floorPose({ elbow: e }), 165, 80));
+    a.eq(real.ctrl.count, 3);
+  });
+
+  t.test('планка: лёжа на полу время не идёт, в упоре идёт', (a) => {
+    const lying = feed(setup(plank), Array(150).fill(floorPose({ lying: true })));
+    a.ok(lying.ctrl.count < 0.5, `лёжа ${lying.ctrl.count.toFixed(2)} с`);
+    const real = feed(setup(plank), Array(150).fill(floorPose()));
+    a.ok(real.ctrl.count > 3.5, `в упоре ${real.ctrl.count.toFixed(2)} с`);
+  });
+
+  /** Сбоку, точки по именам: { S, E, W, H, K, A } (плечо, локоть, запястье, таз, колено, щиколотка). */
+  function sidePose(j) {
+    const lm = blank();
+    const near = [[11, j.S], [13, j.E], [15, j.W], [23, j.H], [25, j.K], [27, j.A], [29, { x: j.A.x + 0.02, y: 0.8 }], [31, { x: j.A.x + 0.04, y: 0.79 }]];
+    near.forEach(([i, p]) => put(lm, i, p));
+    near.forEach(([i, p]) => put(lm, i + 1, { x: p.x + 0.01, y: p.y - 0.005 }, 0.55));
+    put(lm, 0, { x: j.S.x - 0.06, y: j.S.y - 0.03 });
+    return lm;
+  }
+  const legsOnFloor = { H: { x: 0.55, y: 0.8 }, K: { x: 0.7, y: 0.8 }, A: { x: 0.86, y: 0.8 } };
+  // лёжа на животе, грудь чуть приподнята на согнутых руках (кисти у груди, локти торчат вверх), таз и ноги на полу:
+  // плечо выше кисти на 0,31 длины руки, тело почти прямое. Прежняя проверка это пропускала
+  const LOW_COBRA = sidePose({ S: { x: 0.3, y: 0.75 }, E: { x: 0.38, y: 0.74 }, W: { x: 0.33, y: 0.8 }, ...legsOnFloor });
+  // планка на локтях: локоть под плечом на полу, предплечье вперёд, тело прямой линией до носков
+  const FOREARM = sidePose({ S: { x: 0.3, y: 0.68 }, E: { x: 0.3, y: 0.8 }, W: { x: 0.18, y: 0.8 }, H: { x: 0.58, y: 0.74 }, K: { x: 0.72, y: 0.77 }, A: { x: 0.86, y: 0.8 } });
+
+  t.test('планка: лёжа на животе на полусогнутых руках время не идёт, подсказка про руки', (a) => {
+    const s = feed(setup(plank), Array(150).fill(LOW_COBRA));
+    a.ok(s.ctrl.count < 0.5, `лёжа ${s.ctrl.count.toFixed(2)} с`);
+    const r = readyOf(plank, LOW_COBRA);
+    a.eq(r.checks.find((c) => c.id === 'plank').ok, false);
+    a.ok(/прямые руки или на локти/.test(r.hint), `подсказка: ${r.hint}`);
+  });
+
+  t.test('планка на локтях считается', (a) => {
+    const s = feed(setup(plank), Array(150).fill(FOREARM));
+    a.ok(s.ctrl.count > 3.5, `на локтях ${s.ctrl.count.toFixed(2)} с`);
+  });
+
+  t.test('берпи: лёжа на полу не упор лёжа', (a) => {
+    const m = { knee: 175, elbow: 170, tilt: 3, handsDown: true, armsUp: false, ankleY: 0.8 };
+    a.eq(burpee.classify({ ...m, support: 0.02 }), 'move');
+    a.eq(burpee.classify({ ...m, support: 0.95 }), 'plank');
+  });
+
+  // ─── Вокруг упражнений: боты, итоги, config ───
+  t.test('боты: подколы на ошибки новых упражнений по теме', (a) => {
+    a.eq(faultTheme({ code: 'pullup_chin', text: 'подбородок ниже перекладины' }, 'pullup'), 'chin');
+    a.eq(faultTheme({ code: 'burpee_no_jump', text: 'не было прыжка' }, 'burpee'), 'skip');
+    a.eq(faultTheme({ code: 'burpee_no_plank', text: 'не было упора лёжа' }, 'burpee'), 'skip');
+    a.eq(faultTheme({ code: 'dips_lean', text: 'Корпус сильно завален вперёд' }, 'dips'), 'back');
+    a.eq(faultTheme({ code: 'pullup_half_down', text: 'не подтянулся' }, 'pullup'), null);
+  });
+
+  t.test('боты: у каждого типа свои реплики на старт, счёт и финиш', (a) => {
+    for (const type of Object.keys(CHALLENGES)) {
+      for (const kind of ['opener', 'milestone', 'botWon', 'botLost']) a.ok(poolFor(kind, type).length > 6, `${kind}/${type}`);
+    }
+    for (const type of ['dips', 'pullup', 'burpee']) a.ok(poolFor('opener', type).some((l) => l.length && !poolFor('opener', 'squat').includes(l)), type);
+  });
+
+  t.test('итоги: «Лучшая серия» у всех упражнений на повторы, у планки и медитации нет', (a) => {
+    for (const type of ['squat', 'pushup', 'dips', 'pullup', 'burpee']) a.ok(streakText({ type, extra: { bestStreak: 9 } }) !== '', type);
+    for (const type of ['plank', 'meditation']) a.eq(streakText({ type, extra: { bestStreak: 9 } }), '', type);
+  });
+
+  t.test('config: у каждого типа есть место камеры и описание «как выполнять»', (a) => {
+    for (const [type, def] of Object.entries(CHALLENGES)) {
+      a.ok(def.placement && def.howto, type);
+      a.ok(!/—/.test(def.howto + def.placement), `${type}: без длинного тире`);
+    }
+    a.ok(/боком/.test(CHALLENGES.pushup.howto) && /боком/.test(CHALLENGES.plank.howto), 'отжимания и планка: боком к камере');
+  });
+
+  // ─── Настоящие ролики (калибровка порогов) ───
+  t.test('ролик: берпи сбоку без отжимания: строго 0 и 7 × «не было отжимания», без правила отжимания 7 кругов', (a) => {
+    const strict = replay('burpee', burpee);
+    if (!strict) return;
+    a.eq(strict.ctrl.count, 0);
+    a.deep(codes(strict, 'rejected'), Array(7).fill('burpee_no_pushup'));
+    a.eq(strict.ctrl.summary().extra.rejectedText, '7 незасчитанных: 7 × не было отжимания');
+    a.ok(strict.hints.some((h) => /отожмись/.test(h.text)), 'подсказка про отжимание');
+    const loose = replay('burpee', burpee, { options: { requirePushup: false } });
+    a.eq(loose.ctrl.count, 7);
+    a.eq(loose.of('rejected').length, 0);
+  });
+
+  t.test('ролик: брусья сбоку: 12 из 12, недожим на спрыгивании в лог', (a) => {
+    const s = replay('dips-side', dips);
+    if (!s) return;
+    a.eq(s.ctrl.count, 12);
+    a.ok(s.of('rejected').length <= 1, `незасчитанные ${JSON.stringify(codes(s, 'rejected'))}`);
+  });
+
+  t.test('ролик: турник сзади и спереди: 12 из 13, смена ракурса без ложных повторов', (a) => {
+    const s = replay('pullup', pullup);
+    if (!s) return;
+    a.eq(s.ctrl.count, 12);
+    a.ok(s.of('rejected').length <= 1, `незасчитанные ${JSON.stringify(codes(s, 'rejected'))}`);
+  });
+};

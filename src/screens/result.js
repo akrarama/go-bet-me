@@ -122,10 +122,10 @@ export function bestLine(session) {
   return text ? { icon: session.type === 'plank' ? '🧱' : '🔥', text } : null;
 }
 
-/** «Лучшая серия: 7 чистых подряд» для приседаний и отжиманий, если серия не короче MONEY.streakMin. Иначе ''. */
+/** «Лучшая серия: 7 чистых подряд» для упражнений на повторы, если серия не короче MONEY.streakMin. Иначе ''. */
 export function streakText(session) {
   const n = Math.floor(Number(session?.extra?.bestStreak));
-  const reps = session?.type === 'squat' || session?.type === 'pushup';
+  const reps = CHALLENGES[session?.type]?.unit === 'повторы';
   return reps && n >= MONEY.streakMin ? TEXT.streak(n) : '';
 }
 

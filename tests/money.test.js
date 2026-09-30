@@ -2,7 +2,7 @@
 // ставки против в пул, суммы для экрана. Всё на синтетике, без DOM, идёт в jsc.
 
 import friendsTests from './friends.test.js';
-import { settle, refundAll, acceptBet, poolLeft, poolTotal, toCents, formatCredits, formatFee, plural } from '../src/money.js';
+import { settle, refundAll, acceptBet, poolLeft, poolTotal, raiseInfo, raiseStake, toCents, formatCredits, formatFee, plural } from '../src/money.js';
 
 const bet = (id, amount, extra = {}) => ({ id, name: id, avatar: '', amount, ...extra });
 const two5 = () => [bet('dima', 5, { bot: true }), bet('anya', 5, { bot: true })];
@@ -155,6 +155,72 @@ function moneyTests(t) {
     a.deep(deltas(s), [0, 0]);
     a.eq(s.creators.delta, 0);
     a.eq(paidIn(s), paidOut(s));
+  });
+
+  t.test('поднять ставку: кнопка только при полном пуле, шаг 5, потолок 50, не больше баланса', (a) => {
+    a.eq(MONEY.raiseStep, 5);
+    a.eq(MONEY.stakeMax, 50);
+    const open = { stake: 10, bets: [bet('dima', 5, { bot: true })] }; // ещё 5 свободно
+    a.deep(raiseInfo(open, { balance: 100 }), { status: 'open', from: 10, next: 15, visible: false, enabled: false });
+    const full = { stake: 10, bets: two5() };
+    a.deep(raiseInfo(full, { balance: 100 }), { status: 'ok', from: 10, next: 15, visible: true, enabled: true });
+    a.deep(raiseInfo(full, { balance: 15 }), { status: 'ok', from: 10, next: 15, visible: true, enabled: true }, 'баланс ровно на новую ставку: можно');
+    a.deep(raiseInfo(full, { balance: 14.99 }), { status: 'poor', from: 10, next: 15, visible: true, enabled: false }, 'не хватает: кнопка есть, но серая');
+    a.deep(raiseInfo(full, {}), { status: 'poor', from: 10, next: 15, visible: true, enabled: false }, 'баланс не передали: считаем нулём');
+    const top = { stake: 50, bets: [bet('a', 25, { bot: true }), bet('b', 25, { bot: true })] };
+    a.eq(raiseInfo(top, { balance: 500 }).status, 'max', 'потолок 50');
+    a.eq(raiseInfo({ stake: 48, bets: [bet('a', 48)] }, { balance: 500 }).status, 'max', '48 + 5 выше потолка');
+    a.eq(raiseInfo({ stake: 45, bets: [bet('a', 45)] }, { balance: 500 }).status, 'ok', '45 + 5 = потолок, можно');
+    a.eq(raiseInfo(full, { balance: 100, step: 10 }).next, 20, 'шаг можно задать');
+    a.eq(raiseInfo(null).status, 'open');
+    a.eq(raiseInfo(full, { balance: 100, max: 12 }).status, 'max');
+  });
+
+  t.test('поднять ставку: меняет только ставку, пул открывается, дальше по цепочке до потолка', (a) => {
+    const ch = { id: 'c1', stake: 10, bets: two5() };
+    const r = raiseStake(ch, { balance: 100 });
+    a.deep(r, { status: 'ok', from: 10, stake: 15, left: 5 });
+    a.eq(ch.stake, 15);
+    a.eq(ch.bets.length, 2, 'ставки против не тронуты');
+    const again = raiseStake(ch, { balance: 100 });
+    a.deep(again, { status: 'open', from: 15, stake: 15, left: 5 }, 'пул уже не полон: второй раз не поднимаем');
+    a.eq(ch.stake, 15);
+    a.eq(acceptBet(ch, bet('friend', 5)).status, 'ok', 'друг занял освободившееся место');
+    a.eq(poolLeft(ch), 0);
+    a.eq(raiseStake(ch, { balance: 100 }).stake, 20, 'пул снова полон: можно ещё');
+    const poor = { id: 'c2', stake: 10, bets: two5() };
+    a.deep(raiseStake(poor, { balance: 12 }), { status: 'poor', from: 10, stake: 10, left: 0 });
+    a.eq(poor.stake, 10, 'не хватило кредитов: ставка на месте');
+    a.deep(raiseStake(null, { balance: 100 }), { status: 'open', from: 0, stake: 0, left: 0 });
+    let s2 = { id: 'c3', stake: 45, bets: [bet('a', 45)] };
+    a.eq(raiseStake(s2, { balance: 100 }).stake, 50);
+    s2.bets = [bet('a', 50)];
+    a.eq(raiseStake(s2, { balance: 100 }).status, 'max');
+    a.eq(s2.stake, 50);
+  });
+
+  t.test('поднять ставку: расчёт и списание идут по новой ставке, незакрытая часть уходит приложению', (a) => {
+    const w = createWallet({ storage: memory() });
+    const ch = challenge({ stake: 10, bets: two5() });
+    raiseStake(ch, { balance: w.balance }); // 15, в пуле по-прежнему 10
+    w.hold(ch);
+    a.eq(w.balance, 85, 'на Старте списана уже новая ставка');
+    w.end(finished(ch, false));
+    const res = w.settle(ch.id);
+    a.eq(res.settlement.stake, 15);
+    a.eq(res.settlement.open, 5, 'незакрытая часть');
+    a.eq(res.settlement.creators.uncovered, 5, 'уходит приложению, как в разделе 7');
+    a.eq(w.balance, 85, 'проиграл 15');
+    const sum = res.settlement;
+    a.eq(toCents(sum.player.delta) + sum.friends.reduce((s, f) => s + toCents(f.delta), 0) + toCents(sum.creators.delta), 0, 'деньги сходятся');
+    const win = challenge({ stake: 10, bets: two5() });
+    raiseStake(win, { balance: w.balance });
+    w.hold(win);
+    a.eq(w.balance, 70);
+    a.eq(w.balance + 15 + 9, 94, 'сделал: ставка назад и 10 × 0,9 сверху, как раньше');
+    w.end(finished(win, true));
+    w.settle(win.id);
+    a.eq(w.balance, 94);
   });
 
   t.test('acceptBet: кто раньше, тот и в пуле, остальным «пул полон»', (a) => {

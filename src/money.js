@@ -9,6 +9,13 @@
 //   Соло (M = 0): сделал → S остаётся игроку, не сделал → вся S приложению.
 //   Отмена (VOID): refundAll(), всем возврат полностью.
 //
+// «Хочешь больше, поднимаешь свою» (раздел 1 спеки): пул полон, игрок в LOBBY поднимает свою ставку на MONEY.raiseStep (5),
+//   не выше MONEY.stakeMax (50) и не выше баланса. raiseInfo(challenge, { balance }) → { status, from, next, visible, enabled }
+//   для кнопки, raiseStake() поднимает. Деньги при этом не двигаются: ставка списывается на Старте (wallet.hold) уже новой.
+//   status: 'ok' | 'open' (пул не полон, кнопки нет) | 'max' (потолок) | 'poor' (не хватает кредитов).
+//   Кнопка в LOBBY зовёт wallet.raiseStake(challenge): он поднимает ставку и шлёт событие шины
+//   stake:raised {challenge, from, to}; host.js разошлёт друзьям lobby с бо́льшим остатком, боты получат второй шанс.
+//
 // Округление. Внутри всё в целых сотых кредита (как центы): суммы складываются точно, без ошибок
 // двоичных дробей, поэтому ничего не теряется и не появляется. Комиссия берётся с каждой ставки
 // против отдельно и округляется вниз до сотой: приложение никогда не берёт больше f, остаток
@@ -139,6 +146,33 @@ export const poolTotal = ({ stake, bets = [] }) => fromCents(fill(stake, bets).M
 export function poolLeft({ stake, bets = [] }) {
   const { S, M } = fill(stake, bets);
   return fromCents(S - M);
+}
+
+/**
+ * Можно ли поднять свою ставку (кнопка «Поднять ставку» в LOBBY). Ничего не меняет.
+ * balance: кредиты игрока сейчас (ставка списывается на Старте, поэтому новая ставка не больше баланса).
+ * → { status, from, next, visible, enabled }: from и next это ставка сейчас и после поднятия, visible: кнопку показывать
+ *   (пул полон), enabled: нажать можно (status 'ok').
+ */
+export function raiseInfo(challenge, { balance = 0, step = MONEY.raiseStep, max = MONEY.stakeMax } = {}) {
+  if (!challenge) return { status: 'open', from: 0, next: 0, visible: false, enabled: false };
+  const from = Math.max(0, Number(challenge.stake) || 0);
+  const next = fromCents(toCents(from) + toCents(step));
+  let status = 'ok';
+  if (poolLeft(challenge) > 0) status = 'open'; // друзьям ещё есть куда ставить, поднимать незачем
+  else if (toCents(next) > toCents(max)) status = 'max';
+  else if (toCents(next) > toCents(balance)) status = 'poor';
+  return { status, from, next, visible: status !== 'open', enabled: status === 'ok' };
+}
+
+/**
+ * Поднять свою ставку на шаг, если пул полон и хватает кредитов. При успехе меняет challenge.stake.
+ * → { status, from, stake, left }: stake это ставка после вызова, left сколько теперь можно поставить против.
+ */
+export function raiseStake(challenge, opts) {
+  const info = raiseInfo(challenge, opts);
+  if (info.status === 'ok') challenge.stake = info.next;
+  return { status: info.status, from: info.from, stake: challenge?.stake ?? 0, left: challenge ? poolLeft(challenge) : 0 };
 }
 
 /**
