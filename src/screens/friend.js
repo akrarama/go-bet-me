@@ -63,12 +63,18 @@ export function plural(n, one, few, many) {
   return many;
 }
 
-/** Цель словами: повторы или время (от двух минут считаем минутами). */
+/** Цель словами: повторы или время (целые минуты называем минутами: 60 с это «1 минута», 45 с остаётся секундами). */
 export function goalText(unit, n) {
   if (unit !== 'секунды') return `${n} ${plural(n, 'повтор', 'повтора', 'повторов')}`;
-  if (n < 120) return `${n} ${plural(n, 'секунда', 'секунды', 'секунд')}`;
-  const min = Math.round(n / 60);
+  if (n < 60 || n % 60 !== 0) return `${n} ${plural(n, 'секунда', 'секунды', 'секунд')}`;
+  const min = n / 60;
   return `${min} ${plural(min, 'минута', 'минуты', 'минут')}`;
+}
+
+/** Сколько сделал из цели: «6 из 15 повторов» или, для времени, «00:45 из 05:00» (как на экране итогов у игрока). */
+export function progressText(unit, count, target) {
+  if (unit === 'секунды') return `${formatTime(Math.floor(count))} из ${formatTime(target)}`;
+  return `${Math.floor(count)} из ${goalText(unit, target)}`;
 }
 
 /** Как называть челлендж на экране: emoji, название, цель, лимит времени, ставка игрока. */
@@ -380,7 +386,7 @@ export function resultView(S) {
   return {
     success: r.success,
     title: r.success ? 'Сделал' : 'Не сделал',
-    detail: `${Math.floor(r.count)} из ${goalText(unit, r.target)}`,
+    detail: progressText(unit, r.count, r.target),
     line,
     showDelta: r.amount > 0,
     deltaTone: delta > 0 ? 'up' : delta < 0 ? 'down' : 'zero',

@@ -4,7 +4,7 @@ import { MEDITATION as M, MONEY } from '../src/config.js';
 import { FACE, blink, eyesClosed, faceCount, nose, noseTracker, primaryIndex, shiftW, syntheticFace } from '../src/vision/face.js';
 import { createController } from '../src/exercises/meditation.js';
 import friend, {
-  REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural,
+  REACTIONS, betOptions, connectView, createStubGuest, describeChallenge, goalText, initialState, kr, linkOf, lobbyView, plural, progressText,
   reduce, resultView, timerView, videoView, voidView, lostView,
 } from '../src/screens/friend.js';
 
@@ -576,10 +576,16 @@ export default (t) => {
     const rep = (n) => plural(n, 'повтор', 'повтора', 'повторов');
     a.deep([1, 2, 5, 11, 12, 21, 22, 25].map(rep), ['повтор', 'повтора', 'повторов', 'повторов', 'повторов', 'повтор', 'повтора', 'повторов']);
     a.eq(goalText('повторы', 15), '15 повторов');
-    a.eq(goalText('секунды', 60), '60 секунд');
-    a.eq(goalText('секунды', 61), '61 секунда');
+    a.eq(goalText('секунды', 60), '1 минута');
+    a.eq(goalText('секунды', 300), '5 минут');
+    a.eq(goalText('секунды', 600), '10 минут');
     a.eq(goalText('секунды', 180), '3 минуты');
     a.eq(goalText('секунды', 1800), '30 минут');
+    a.eq(goalText('секунды', 45), '45 секунд', 'меньше минуты: секунды');
+    a.eq(goalText('секунды', 61), '61 секунда', 'не целые минуты: секунды, а не округление');
+    a.eq(goalText('секунды', 90), '90 секунд');
+    a.eq(progressText('секунды', 44.6, 300), '00:44 из 05:00', 'время в итоге как у игрока');
+    a.eq(progressText('повторы', 6.9, 15), '6 из 15 повторов');
   });
 
   t.test('friend: статусы связи от peer.js приводятся к четырём', (a) => {
@@ -747,7 +753,7 @@ export default (t) => {
     a.eq(timerView(timed, 500000).text, '00:00', 'время вышло: не уходим в минус');
     const med = msg(lobbyOf(initialState('h'), { challenge: { id: 'm', type: 'meditation', target: 60, limitSec: null, stake: 10 } }), { t: 'start', challenge: { id: 'm', type: 'meditation', target: 60, limitSec: null, stake: 10 } }, 1000);
     a.deep(timerView(med, 31000), { text: '00:30', low: false });
-    a.eq(describeChallenge(med.challenge).goal, '60 секунд');
+    a.eq(describeChallenge(med.challenge).goal, '1 минута');
     a.eq(describeChallenge(med.challenge).time, null);
   });
 
@@ -1189,5 +1195,15 @@ export default (t) => {
     a.eq(c.lives, 0);
     step(1700);
     a.eq(c.failed, true, 'три жизни: провал');
+  });
+
+  t.test('friend: итог медитации со временем, цель в минутах', (a) => {
+    const target = { id: 'm', type: 'meditation', target: 300, limitSec: null, stake: 10 };
+    let S = msg(lobbyOf(initialState('h'), { challenge: target, left: 10 }), { t: 'start', challenge: target }, 0);
+    a.eq(lobbyView(lobbyOf(initialState('h'), { challenge: target, left: 10 })).title, '🧘 Медитация: 5 минут');
+    S = msg(S, { t: 'end', success: false, count: 187.4, target: 300 });
+    a.eq(resultView(S).detail, '03:07 из 05:00');
+    const done = msg(msg(lobbyOf(initialState('h'), { challenge: target, left: 10 }), { t: 'start', challenge: target }, 0), { t: 'end', success: true, count: 300, target: 300 });
+    a.eq(resultView(done).detail, '05:00 из 05:00');
   });
 };
