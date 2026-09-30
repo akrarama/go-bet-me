@@ -7,6 +7,7 @@ import { createFeedback } from '../src/feedback.js';
 import { alphaFor, createCounter, createHolds, describeRejected, PRIORITY } from '../src/exercises/reps.js';
 import * as squat from '../src/exercises/squat.js';
 import * as pushup from '../src/exercises/pushup.js';
+import * as plank from '../src/exercises/plank.js';
 
 // ─── Поза из 33 точек ───────────────────────────────────────────
 
@@ -1136,6 +1137,188 @@ export default (t) => {
     a.eq(r.hint, 'Не видно рук: поставь камеру сбоку');
     r = p.probe(hold(squatPose(STAND), 3));
     a.eq(r.hint, 'Прими упор лёжа, боком к камере');
+  });
+
+  // ─── Планка: секунды в правильной позе ───
+  const PLANK_EDGE = 'Не видно ног: отойди дальше или поставь камеру ниже';
+  /** Колени на полу: колени опущены, ступни подняты за ними (обе стороны тела). */
+  const kneesOnFloor = (lm) => {
+    const out = lm.map((p) => ({ ...p }));
+    for (const [hipI, kneeI, ankleI] of [[23, 25, 27], [24, 26, 28]]) {
+      const dir = Math.sign(out[ankleI].x - out[hipI].x);
+      out[kneeI] = { ...out[kneeI], x: out[hipI].x + (out[ankleI].x - out[hipI].x) * 0.5, y: 0.885 };
+      out[ankleI] = { ...out[ankleI], x: out[kneeI].x + dir * 0.05, y: 0.72 };
+    }
+    return out;
+  };
+  const PLANK = pushupPose(TOP);
+
+  t.test('планка: секунды идут только в правильной планке, done при цели', (a) => {
+    const s = setup(plank, { target: 60 });
+    s.feed(hold(PLANK, 90)); // 3 с
+    a.near(s.ctrl.count, 3, 0.15);
+    a.eq(s.ctrl.unit, 'секунды');
+    s.feed(hold(squatPose(STAND), 60)); // встал: время стоит
+    a.near(s.ctrl.count, 3, 0.25);
+    s.feed(hold(PLANK, 60)); // снова в упоре
+    a.near(s.ctrl.count, 5, 0.4);
+    a.eq(s.ctrl.done, false);
+    a.eq(s.ctrl.failed, false);
+    const d = setup(plank, { target: 2 });
+    d.feed(hold(PLANK, 50));
+    a.eq(d.ctrl.done, false, 'через 1.7 с ещё нет');
+    d.feed(hold(PLANK, 20));
+    a.eq(d.ctrl.done, true, 'через 2.4 с цель');
+  });
+
+  t.test('планка: таз провис или задран: время на паузе, подсказка, красный таз, возвращается', (a) => {
+    for (const [label, sag, code, text] of [['провис', 0.07, 'hip_sag', 'Таз провисает, напряги живот, выровняй тело'], ['задран', -0.07, 'hip_pike', 'Таз задран вверх, опусти таз в линию с плечами']]) {
+      const s = setup(plank, { target: 60 });
+      s.feed(hold(PLANK, 60)); // 2 с ровно
+      s.feed(hold(pushupPose({ ...TOP, sag }), 90)); // 3 с криво
+      a.ok(s.ctrl.count < 2.6, `${label}: за три секунды кривой планки прибавилось меньше 0.6 с (${s.ctrl.count.toFixed(2)})`);
+      a.eq(s.feedback.current?.text, text, label);
+      a.eq(s.feedback.current?.level, 'warn');
+      a.ok(s.feedback.highlight.has(23), `${label}: красный таз`);
+      a.deep(s.of('fault').map((e) => e.code), [code], label);
+      s.feed(hold(PLANK, 90)); // выровнялся
+      a.ok(s.ctrl.count > 3.8, `${label}: время пошло снова (${s.ctrl.count.toFixed(2)})`);
+    }
+  });
+
+  t.test('планка: колени на полу: время на паузе, подсказка про колени, красное колено; прямая планка не ловится', (a) => {
+    const s = setup(plank, { target: 60 });
+    s.feed(hold(PLANK, 60));
+    a.eq(s.of('fault').length, 0, 'прямая планка без ошибок');
+    s.feed(hold(kneesOnFloor(PLANK), 120)); // 4 с на коленях
+    a.ok(s.ctrl.count < 2.5, `на коленях время не идёт (${s.ctrl.count.toFixed(2)})`);
+    a.deep(s.of('fault').map((e) => [e.code, e.label]), [['plank_knees', 'колени на полу']]);
+    a.eq(s.feedback.current?.text, 'Колени на полу: подними их, ноги прямые');
+    a.ok(s.feedback.highlight.has(25), 'красное колено');
+    s.feed(hold(PLANK, 60));
+    a.ok(s.ctrl.count > 3, 'выпрямил ноги: время пошло');
+  });
+
+  t.test('планка: вышел из планки только после того, как уже стоял в упоре; до этого подсказка без ошибки', (a) => {
+    const s = setup(plank, { target: 60 });
+    s.feed(hold(squatPose(STAND), 60)); // ещё не лёг
+    a.eq(s.feedback.current?.text, 'Прими упор лёжа, боком к камере');
+    a.eq(s.feedback.current?.level, 'info');
+    a.eq(s.of('fault').length, 0, 'ещё не вставал в планку: не ошибка');
+    s.feed(hold(PLANK, 90)); // лёг, стоит 3 с
+    a.eq(s.feedback.current, null);
+    s.feed(hold(squatPose(STAND), 45)); // встал
+    a.deep(s.of('fault').map((e) => [e.code, e.label, e.text]), [['plank_left', 'вышел из планки', 'Прими упор лёжа, боком к камере']]);
+    a.eq(s.feedback.current?.level, 'warn');
+    const c = s.ctrl.count;
+    s.feed(hold(squatPose(STAND), 60));
+    a.near(s.ctrl.count, c, 0.001, 'стоя время не идёт');
+    a.deep(s.of('fault').length, 1, 'одна ошибка, а не по кадру');
+    s.feed(hold(PLANK, 60));
+    a.ok(s.ctrl.count > c + 1.2, 'лёг снова: идёт');
+  });
+
+  t.test('планка: видимость как у отжиманий (край кадра, потеря позы, никого) и пауза счёта', (a) => {
+    const s = setup(plank, { target: 60 });
+    s.feed(hold(PLANK, 60));
+    const c = s.ctrl.count;
+    s.feed(hold(pushupPose({ ...TOP, override: { 27: { x: 0.998 }, 28: { x: 0.998 } } }), 45));
+    a.eq(s.feedback.current?.text, PLANK_EDGE);
+    a.near(s.ctrl.count, c, 0.05, 'ноги за краем: время стоит');
+    s.feed(hold(PLANK, 30));
+    s.feed(hold(null, 45)); // потеряли посреди кадра
+    a.eq(s.feedback.current?.text, 'Плохо видно: добавь света или не стой спиной к окну');
+    const n = setup(plank);
+    n.feed(hold(null, 30));
+    a.eq(n.feedback.current?.text, 'Не вижу тебя: встань в кадр целиком и проверь свет');
+    a.deep(n.of('fault').length, 0, 'ещё не вставал в планку: не ошибка');
+  });
+
+  t.test('планка: ready даёт три галочки с подсказками и ничего не шлёт, счёт после него тот же', (a) => {
+    const s = setup(plank);
+    let r = s.probe(hold(PLANK, 4));
+    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true], ['line', 'Тело ровное', true]]);
+    a.eq(r.ok, true);
+    a.eq(r.hint, null);
+    a.ok(r.checks.every((c) => c.text.length <= 22));
+    r = s.probe(hold(squatPose(STAND), 4));
+    a.deep(byId(r), { body: true, plank: false, line: false });
+    a.eq(r.hint, 'Прими упор лёжа, боком к камере');
+    r = s.probe(hold(pushupPose({ ...TOP, sag: 0.07 }), 12));
+    a.deep(byId(r), { body: true, plank: true, line: false });
+    a.eq(r.hint, 'Таз провисает, напряги живот, выровняй тело');
+    r = s.probe(hold(pushupPose({ ...TOP, sag: -0.07 }), 12));
+    a.eq(r.hint, 'Таз задран вверх, опусти таз в линию с плечами');
+    r = s.probe(hold(kneesOnFloor(PLANK), 12));
+    a.eq(r.hint, 'Колени на полу: подними их, ноги прямые');
+    r = s.probe(hold(pushupPose({ ...TOP, override: { 27: { x: 0.998 }, 28: { x: 0.998 } } }), 3));
+    a.deep(byId(r), { body: false, plank: false, line: false });
+    a.eq(r.hint, PLANK_EDGE);
+    a.eq(s.events.length, 0, 'ready ничего не шлёт в шину');
+    a.eq(s.feedback.current, null, 'ready не пишет подсказку');
+    a.eq(s.ctrl.count, 0);
+    // счёт после ready тот же, что без него
+    const frames = [...hold(PLANK, 90), ...hold(pushupPose({ ...TOP, sag: 0.07 }), 60), ...hold(PLANK, 60)];
+    const cold = setup(plank);
+    cold.feed(frames);
+    const warm = setup(plank);
+    warm.probe([...hold(squatPose(STAND), 6), ...hold(PLANK, 30)]);
+    warm.wait(3000);
+    warm.ctrl.start(warm.t);
+    warm.feed(frames);
+    a.near(warm.ctrl.count, cold.ctrl.count, 0.1);
+    a.deep(warm.of('fault').map((e) => e.code), cold.of('fault').map((e) => e.code));
+  });
+
+  t.test('планка: похвала за каждые 15 с ровной планки подряд, уровень ok, серию рвёт пауза', (a) => {
+    const s = setup(plank, { target: 300 });
+    const calls = praiseSpy(s);
+    s.feed(hold(PLANK, 30 * 35)); // 35 с ровно
+    a.deep(calls.map((c) => [c.text, c.shown, c.level]), [['Корпус ровный, держи', true, 'ok'], ['Ровная линия, так держать', true, 'ok']]);
+    a.eq(s.sounds.length, 0, 'без звука');
+    // кривая планка посередине рвёт серию: 10 с, провис 3 с, потом до похвалы ещё 15 с
+    const q = setup(plank, { target: 300 });
+    const qc = praiseSpy(q);
+    q.feed(hold(PLANK, 30 * 10));
+    q.feed(hold(pushupPose({ ...TOP, sag: 0.07 }), 90));
+    q.feed(hold(PLANK, 30 * 14));
+    a.eq(qc.length, 0, 'после провиса серия с нуля: 14 с ещё мало');
+    q.feed(hold(PLANK, 60));
+    a.eq(qc.length, 1);
+    // поверх ошибки похвала не показывается
+    const w = setup(plank, { target: 300 });
+    const wc = praiseSpy(w);
+    w.feed(hold(PLANK, 30 * 14));
+    w.feedback.hint('Тест: висит ошибка', { code: 'test_error', priority: PRIORITY.form, level: 'warn', ttl: 120000 });
+    w.feed(hold(PLANK, 60));
+    a.deep(wc.map((c) => c.shown), [false]);
+    a.eq(w.feedback.current?.text, 'Тест: висит ошибка');
+  });
+
+  t.test('планка: summary с лучшим удержанием и ошибками, кадр с большим разрывом не растягивает время', (a) => {
+    const s = setup(plank, { target: 300 });
+    s.feed(hold(PLANK, 30 * 20 + 10)); // 20 с
+    s.feed(hold(squatPose(STAND), 30 * 3)); // вышел на 3 с
+    s.feed(hold(PLANK, 30 * 10 + 10)); // ещё 10 с
+    const sum = s.ctrl.summary();
+    a.eq(sum.extra.bestHoldSec, 20, 'лучшее удержание подряд');
+    a.ok(sum.extra.holdSec >= 29 && sum.extra.holdSec <= 30, `всего секунд ${sum.extra.holdSec}`);
+    a.deep(sum.faults, [{ code: 'plank_left', text: 'вышел из планки', count: 1 }]);
+    a.deep(sum.rejected, []);
+    const g = setup(plank, { target: 300 });
+    g.feed([PLANK], { dt: 5000 }); // следующий кадр придёт через 5 с (камера пропала)
+    g.feed([PLANK]);
+    a.ok(g.ctrl.count > 0 && g.ctrl.count <= 0.45, `разрыв в 5 с прибавил не больше 0.4 с (${g.ctrl.count})`);
+  });
+
+  t.test('ролики отжиманий как «планка с движением»: время идёт в упоре, колени на полу не мерещатся', (a) => {
+    const side = replayTrace('pushup-side-short', plank);
+    if (!side) return;
+    a.ok(side.ctrl.count > 5 && side.ctrl.count < 8, `pushup-side-short: ${side.ctrl.count.toFixed(1)} с планки`);
+    a.eq(side.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
+    const wide = replayTrace('pushup-horizontal', plank);
+    a.ok(wide.ctrl.count > 15 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
+    a.eq(wide.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───
