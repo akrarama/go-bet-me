@@ -27,7 +27,8 @@ let lastVideoTime = -1;
 let frames = 0;
 let fpsFrom = 0;
 
-const normalize = {
+/** Результат модели → формат frame (его же использует tests/replay.js). */
+export const normalize = {
   pose: (r, t) => ({ t, landmarks: r.landmarks?.[0] ?? null, world: r.worldLandmarks?.[0] ?? null }),
   gesture: (r, t) => ({
     t,

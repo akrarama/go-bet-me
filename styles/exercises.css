@@ -1,2 +1,6 @@
 /* Стили блока 1 (Упражнения): LIVE-оверлеи ошибок, лог незасчитанных.
    Токены (цвета, шрифты, радиусы) берём из base.css, свои не заводим. */
+
+/* Подсказка уходит плавно, а не пропадает рывком (feedback.js держит элемент 220 мс) */
+.hint.is-out { animation: hint-out 0.22s var(--ease-out) both; }
+@keyframes hint-out { to { opacity: 0; transform: translate(-50%, 10px) scale(0.97); } }
