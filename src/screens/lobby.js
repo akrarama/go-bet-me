@@ -256,8 +256,29 @@ export default {
               <h3 class="lobby-title">Позови друга</h3>
               <p class="invite-text">Друг наводит камеру на QR и ставит против</p>
               <p class="invite-link">${esc(shortLink(url))}</p>
+              <button class="invite-copy" type="button" data-copy-invite>Скопировать ссылку</button>
               <p class="invite-watch" data-watch aria-live="polite"></p>
             </div>`;
+          v.invite.querySelector('[data-copy-invite]').addEventListener('click', async () => {
+            try {
+              if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(url);
+              } else {
+                const field = document.createElement('textarea');
+                field.value = url;
+                field.style.position = 'fixed';
+                field.style.opacity = '0';
+                document.body.append(field);
+                field.select();
+                const copied = document.execCommand('copy');
+                field.remove();
+                if (!copied) throw new Error('Clipboard unavailable');
+              }
+              ctx.ui.toast('Ссылка скопирована');
+            } catch {
+              ctx.ui.toast('Не удалось скопировать. Скопируй ссылку вручную из карточки.');
+            }
+          });
           const hit = qrCached(url);
           if (hit) setQr(hit);
           else qrFor(url).then((svg) => view === v && v.inviteKey === url && setQr(svg));

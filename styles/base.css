@@ -51,7 +51,7 @@
 .account-card button { padding: 14px 18px; color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 12px; font: 800 15px var(--font-ui); cursor: pointer; }
 .account-card [data-switch] { margin-top: 14px; padding: 0; color: var(--text); background: transparent; text-decoration: underline; }
 .account-error { min-height: 1.4em; color: #ff8585 !important; }
-.account-user { position: absolute; top: calc(var(--safe-t) + 18px); right: var(--gutter); z-index: 7; display: flex; align-items: center; gap: 8px; }
+.account-user { position: absolute; top: calc(var(--safe-t) + 58px); left: var(--gutter); z-index: 7; display: flex; align-items: center; gap: 8px; }
 .account-user button { padding: 7px 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; }
 
 html,
