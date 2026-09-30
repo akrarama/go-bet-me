@@ -8,7 +8,7 @@ import { GESTURES } from '../config.js';
 import { gestures } from '../vision/gestures.js';
 
 /** «1 секунду» для целой секунды, иначе «1,5 с» (значения из config, текст не должен врать при их смене). */
-const secText = (ms) => {
+export const secText = (ms) => {
   const s = Math.round(ms / 100) / 10;
   return s === 1 ? '1 секунду' : `${String(s).replace('.', ',')} с`;
 };
@@ -45,7 +45,7 @@ export default {
           <span class="gesture-cta__icon" aria-hidden="true">👍</span><span>Покажи 👍, чтобы начать</span>
         </div>
         <div class="idle-alt">
-          <p class="idle-alt__text">Не ловится 👍? Наведи палец на кнопку и подержи секунду</p>
+          <p class="idle-alt__text">Не ловится 👍? Наведи палец на кнопку и подержи ${secText(GESTURES.dwellMs)}</p>
           <button class="btn idle-start" data-dwell data-action="start">Начать</button>
         </div>
         <section class="idle-legend" aria-labelledby="idle-legend-title">

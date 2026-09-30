@@ -5,6 +5,7 @@ import { GESTURES } from '../src/config.js';
 import { createGestureGate, createHandUpTracker, pickLivenessTask, livenessTaskFor, createLivenessJudge, LIVENESS_TEXT, createCursorGate, gestures } from '../src/vision/gestures.js';
 import { targetLabel, goalChip, goalNote, plural, mss } from '../src/screens/setup.js';
 import { CHALLENGES } from '../src/config.js';
+import { secText } from '../src/screens/idle.js';
 import { createOneEuro2D, createDweller } from '../src/ui/dwell.js';
 import { createFeedback } from '../src/feedback.js';
 import { VERDICT_HINT } from '../src/screens/liveness.js';
@@ -1187,6 +1188,22 @@ export default (t) => {
         a.ok(goalChip(type, n).startsWith(`${num} ${unit}`), `${type} ${n}: чип начинается с цели`);
       }
       a.eq(typeof goalNote(type), 'string');
+    }
+  });
+
+  // ─── Тексты: одна запись и один голос ──────────────────────────────
+
+  t.test('тексты: секунды в подсказках одной записью («1 секунду», дробные через запятую)', (a) => {
+    a.eq(secText(1000), '1 секунду');
+    a.eq(secText(1500), '1,5 с');
+    a.eq(secText(2000), '2 с');
+    a.eq(secText(GESTURES.dwellMs), '1 секунду', 'так читается инструкция про кнопки в IDLE и SETUP');
+  });
+
+  t.test('тексты: провал проверки пишет камера, а не «мы», без мужского рода про игрока', (a) => {
+    for (const [task, text] of Object.entries(LIVENESS_TEXT)) {
+      a.ok(text.fail.startsWith('камера не увидела '), `${task}: «${text.fail}»`);
+      a.ok(!/[—–]/.test(text.title + text.fail), `${task}: без длинного тире`);
     }
   });
 };
