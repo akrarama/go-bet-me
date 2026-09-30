@@ -68,7 +68,7 @@ export const GATES = {
  * Тело в кадре добавляет сам движок (reps.js ready).
  */
 const isPlank = (m, cfg) => m.tilt != null && m.tilt < cfg.plankMaxTilt && m.handsDown;
-export const CHECKS = [{ id: 'plank', text: 'Упор лёжа', test: isPlank }];
+export const CHECKS = [{ id: 'plank', text: 'Упор лёжа', hint: GATES.plank.hint, test: isPlank }];
 
 /** Метрики кадра (сторона idx уже выбрана и видна). */
 export function measure({ lm, idx, aspect, sm, cfg = REPS.pushup }) {

@@ -80,8 +80,8 @@ export const GATES = {
 const isUpright = (m) => m.upright;
 const isSide = (m) => !m.front;
 export const CHECKS = [
-  { id: 'side', text: 'Боком к камере', test: isSide },
-  { id: 'stand', text: 'Стоишь прямо', test: isUpright },
+  { id: 'side', text: 'Боком к камере', hint: GATES.front.hint, test: isSide },
+  { id: 'stand', text: 'Стоишь прямо', hint: GATES.stand.hint, test: isUpright },
 ];
 
 /** Стоит лицом к камере или боком: ширина плеч в кадре к длине корпуса, с запасом от дрожания. */
