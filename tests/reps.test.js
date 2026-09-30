@@ -371,7 +371,7 @@ export default (t) => {
   t.test('приседания: колени за носки: повтор не засчитан, подсказка жюри дословно', (a) => {
     const s = setup(squat);
     s.feed(hold(squatPose(STAND), 10));
-    s.feed(rep(squatPose, STAND, { ...DEEP, shin: 42 }, 2000));
+    s.feed(rep(squatPose, STAND, { ...DEEP, shin: 55 }, 2000));
     s.feed(hold(squatPose(STAND), 10));
     a.eq(s.ctrl.count, 0);
     a.deep(s.of('rejected').map((e) => [e.code, e.text]), [['knees_over_toes', 'колени за носками']]);
@@ -384,7 +384,7 @@ export default (t) => {
     const s = setup(squat);
     const make = (p) => squatPose({ ...p, dir: -1, near: 'right' });
     s.feed(hold(make(STAND), 10));
-    s.feed(rep(make, STAND, { ...DEEP, shin: 42 }, 2000));
+    s.feed(rep(make, STAND, { ...DEEP, shin: 55 }, 2000));
     s.feed(hold(make(STAND), 10));
     a.deep(s.of('rejected').map((e) => e.code), ['knees_over_toes']);
     a.deep(s.of('fault')[0].joints, [26, 28, 32]);
@@ -401,7 +401,7 @@ export default (t) => {
   t.test('приседания: наклон спины в нижней точке: повтор не засчитан', (a) => {
     const s = setup(squat);
     s.feed(hold(squatPose(STAND), 10));
-    s.feed(rep(squatPose, STAND, { ...DEEP, lean: 58 }, 2000));
+    s.feed(rep(squatPose, STAND, { ...DEEP, lean: 66 }, 2000));
     s.feed(hold(squatPose(STAND), 10));
     a.eq(s.ctrl.count, 0);
     a.deep(s.of('rejected').map((e) => e.code), ['torso_lean']);
@@ -526,7 +526,7 @@ export default (t) => {
     a.eq(s.ctrl.count, 0);
     a.deep(s.of('rejected').map((e) => [e.code, e.text]), [['pushup_half_down', 'недостаточная глубина']]);
     const f = s.of('fault')[0];
-    a.ok(/^Не до конца опускаешься: локоть 1[34]\d°, нужно меньше 125°$/.test(f.text), f.text);
+    a.ok(/^Не до конца опускаешься: локоть 1[34]\d°, нужно меньше 130°$/.test(f.text), f.text);
   });
 
   t.test('отжимания: не выпрямил руки: угол в тексте', (a) => {
@@ -724,6 +724,46 @@ export default (t) => {
     a.ok(q.of('fault').some((e) => e.code === 'pushup_tempo'), 'темп записан');
   });
 
+  // ─── Щадящие пороги для обычного человека (явные ошибки при этом остаются) ───
+  t.test('щадящие пороги: присед до 105° в кадре, наклон 50° и колено за носком 0.2 засчитываются', (a) => {
+    for (const [label, bottom] of [['присед 105°', { knee: 105, shin: 22, lean: 20 }], ['наклон 50°', { ...DEEP, lean: 50 }], ['колено за носком ~0.2', { ...DEEP, shin: 36 }]]) {
+      const s = setup(squat);
+      s.feed(hold(squatPose(STAND), 10));
+      s.feed(rep(squatPose, STAND, bottom, 2000));
+      s.feed(hold(squatPose(STAND), 10));
+      a.eq(s.ctrl.count, 1, label);
+      a.eq(s.of('rejected').length, 0, `${label}: лог пуст`);
+      a.eq(s.of('fault').length, 0, `${label}: ошибок нет`);
+    }
+  });
+
+  t.test('явные ошибки остаются: присед до 120° мелкий, наклон 66° и колени 0.43 за носками не засчитаны', (a) => {
+    const cases = [['мелкий присед 120°', { knee: 120, shin: 22, lean: 20 }, 'squat_shallow'], ['наклон 66°', { ...DEEP, lean: 66 }, 'torso_lean'], ['колени далеко вперёд', { ...DEEP, shin: 55 }, 'knees_over_toes']];
+    for (const [label, bottom, code] of cases) {
+      const s = setup(squat);
+      s.feed(hold(squatPose(STAND), 10));
+      s.feed(rep(squatPose, STAND, bottom, 2000));
+      s.feed(hold(squatPose(STAND), 10));
+      a.eq(s.ctrl.count, 0, label);
+      a.deep(s.of('rejected').map((e) => e.code), [code], label);
+    }
+  });
+
+  t.test('щадящие пороги: локоть внизу 126° в кадре засчитан, 136° и таз провис нет', (a) => {
+    const s = setup(pushup);
+    s.feed(hold(pushupPose(TOP), 10));
+    s.feed(rep(pushupPose, TOP, { elbow: 126 }, 1600));
+    s.feed(hold(pushupPose(TOP), 5));
+    a.eq(s.ctrl.count, 1);
+    a.eq(s.of('rejected').length, 0);
+    s.feed(rep(pushupPose, TOP, { elbow: 136 }, 1600));
+    s.feed(hold(pushupPose(TOP), 5));
+    s.feed(rep((p) => pushupPose({ ...p, sag: 0.07 }), TOP, LOW, 1600));
+    s.feed(hold(pushupPose(TOP), 5));
+    a.eq(s.ctrl.count, 1);
+    a.deep(s.of('rejected').map((e) => e.code), ['pushup_half_down', 'hip_sag']);
+  });
+
   // ─── «Встань в позицию» (ready): галочки до отсчёта LIVE ───
   const ticks = (r) => r.checks.map((c) => [c.id, c.text, c.ok]);
   const byId = (r) => Object.fromEntries(r.checks.map((c) => [c.id, c.ok]));
@@ -761,7 +801,7 @@ export default (t) => {
   });
 
   t.test('ready приседания: чистая проверка, счёт после неё тот же, что без неё', (a) => {
-    const frames = [...hold(squatPose(STAND), 12), ...rep(squatPose, STAND, DEEP, 1800), ...rep(squatPose, STAND, { ...DEEP, lean: 58 }, 1800), ...hold(squatPose(STAND), 10)];
+    const frames = [...hold(squatPose(STAND), 12), ...rep(squatPose, STAND, DEEP, 1800), ...rep(squatPose, STAND, { ...DEEP, lean: 66 }, 1800), ...hold(squatPose(STAND), 10)];
     const cold = setup(squat);
     cold.feed(frames);
     const warm = setup(squat);
@@ -824,11 +864,11 @@ export default (t) => {
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───
-  t.test('ролик: приседания сбоку: 5 засчитано, шестой не засчитан за наклон спины', (a) => {
+  t.test('ролик: приседания сбоку: все 6 засчитаны (глубокий присед с наклоном 53° больше не ошибка)', (a) => {
     const s = replayTrace('squat-side', squat);
     if (!s) return;
-    a.eq(s.ctrl.count, 5);
-    a.deep(s.of('rejected').map((e) => e.code), ['torso_lean']);
+    a.eq(s.ctrl.count, 6);
+    a.eq(s.of('rejected').length, 0);
   });
 
   t.test('ролик: отжимания сбоку: 3 полных повтора (четвёртый обрезан заставкой)', (a) => {

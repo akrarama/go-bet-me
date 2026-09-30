@@ -1,14 +1,19 @@
 // LOBBY: друзья ставят против (P0: боты), пул. Старт: рука над головой 1 с → LIVENESS. 👎 → SETUP.
 // Запасной старт, если рука не ловится: dwell-кнопка «Старт» (палец-курсор, 1 с).
-// Владелец: блок 2 (Жесты). Ставки даёт блок 3: bots.join(challenge) → событие bet.
+// P1: карточка приглашения друга (QR, ссылка, «Смотрят: N») по событию peer:ready, см. ui/invite.js.
+// Нет peer:ready или пришёл peer:error → карточки нет, всё как в P0.
+// Владелец: блок 2 (Жесты). Ставки даёт блок 3: bots.join(challenge) и peer.js → событие bet.
 // Модели ['gesture', 'pose'] по очереди: палец-курсор и «рука вверх» одновременно.
 // Прогресс удержания руки (gestures.bestArm) видно дважды: большое кольцо старта и кольцо у запястья.
 
 import { CHALLENGES, GESTURES } from '../config.js';
+import { bus } from '../bus.js';
+import { debug } from '../debug.js';
 import { COLORS } from '../draw.js';
 import { bots } from '../friends/bots.js';
 import { sound } from '../sound.js';
 import { esc } from '../ui.js';
+import { invite, qrCached, qrFor, shortLink, betRow } from '../ui/invite.js';
 import { gestures, LIVENESS_TEXT } from '../vision/gestures.js';
 import { mss, plural, targetLabel } from './setup.js';
 
@@ -21,6 +26,33 @@ const OUT_HINT_MS = 1000; // рука за краем кадра столько 
 const GO_DELAY_MS = 350; // «Старт!» успевает мелькнуть
 
 let view = null;
+let simCtx = null; // экран открыт: для debug-имитации друга
+
+// ?debug=1, клавиша k: пока peer.js нет (или чтобы не искать второй телефон), имитация друга по ссылке. Шаги по кругу.
+const SIM = [
+  ['ссылка готова (peer:ready)', () => bus.emit('peer:ready', { id: 'demo1234', url: 'https://akrarama.github.io/go-bet-me/?join=demo1234' })],
+  ['друг Тимур зашёл', () => bus.emit('friend:join', { id: 'demo-a', name: 'Тимур', avatar: '🧑' })],
+  ['Тимур поставил 5', simBet],
+  ['друг Аня зашла', () => bus.emit('friend:join', { id: 'demo-b', name: 'Аня', avatar: '👩' })],
+  ['Тимур ушёл', () => bus.emit('friend:leave', { id: 'demo-a' })],
+  ['облако упало (peer:error)', () => bus.emit('peer:error', { error: 'debug' })],
+];
+let simStep = 0;
+function simBet() {
+  const ch = simCtx?.app.challenge;
+  if (!ch) return;
+  import('../money.js').then(({ acceptBet }) => {
+    const r = acceptBet(ch, { id: 'peer:demo-a', name: 'Тимур', avatar: '🧑', amount: 5, bot: false });
+    if (r.bet) bus.emit('bet', { bet: r.bet, challenge: ch });
+    else simCtx?.ui.toast(`Ставка друга не принята: ${r.status}`);
+  });
+}
+debug.key('k', () => {
+  const [label, run] = SIM[simStep % SIM.length];
+  simStep++;
+  debug.set('друг (k)', `${simStep}: ${label}`);
+  run();
+}, 'друг по ссылке: имитация, жми по шагам (LOBBY)');
 
 /** Кольцо прогресса вокруг запястья (LOBBY и LIVENESS): дорожка + дуга акцентом от 12 часов. */
 export function drawWristRing(draw, wrist, progress) {
@@ -102,25 +134,29 @@ export default {
           <button class="btn btn--primary lobby-go" data-dwell data-action="go">Старт</button>
           <div class="lobby-alt">Рука не ловится? Наведи палец на кнопку</div>
         </section>
+        <section class="panel lobby-invite" data-invite hidden></section>
       </div>`;
 
     const q = (sel) => ctx.root.querySelector(sel);
     const v = (view = {
-      going: false, p: -1, charging: false, coach: null, seen: new Set(),
+      going: false, p: -1, charging: false, coach: null, seen: new Set(), inviteUrl: null, offInvite: null,
+      lobby: q('.lobby'), invite: q('[data-invite]'),
       bets: q('[data-bets]'), empty: q('[data-empty]'), pool: q('[data-pool]'), full: q('[data-full]'), meter: q('[data-meter]'),
       start: q('[data-start]'), gauge: q('[data-gauge]'), label: q('[data-label]'),
     });
 
-    // Ставки: уже сделанные (вернулись после проверки) и новые по событию bet, без повторов
+    // Ставки: уже сделанные (вернулись после проверки) и новые по событию bet, без повторов.
+    // Ставка друга по ссылке (bet.bot = false) в том же списке, что боты, с меткой «по ссылке».
     const addBet = (bet, i = 0) => {
       if (!bet || v.seen.has(bet.id)) return;
       v.seen.add(bet.id);
+      const r = betRow(bet);
       v.bets.insertAdjacentHTML(
         'beforeend',
-        `<li class="lobby-bet" style="--i: ${i}">
-          <span class="lobby-bet__avatar" aria-hidden="true">${esc(bet.avatar)}</span>
-          <span class="lobby-bet__name">${esc(bet.name)}</span>
-          <span class="lobby-bet__amount">${bet.amount} кр.</span>
+        `<li class="lobby-bet${r.link ? ' lobby-bet--link' : ''}" style="--i: ${i}">
+          <span class="lobby-bet__avatar" aria-hidden="true">${esc(r.avatar)}</span>
+          <span class="lobby-bet__who"><span class="lobby-bet__name">${esc(r.name)}</span>${r.link ? '<span class="lobby-bet__tag">по ссылке</span>' : ''}</span>
+          <span class="lobby-bet__amount">${r.amount} кр.</span>
         </li>`,
       );
     };
@@ -139,6 +175,58 @@ export default {
       renderPool();
     });
     bots.join(ch);
+
+    // Приглашение друга (P1): карточка есть, пока есть ссылка (peer:ready), и пропадает по peer:error
+    const setQr = (svg) => {
+      const box = v.invite.querySelector('[data-qr]');
+      if (!box) return;
+      if (svg) {
+        box.innerHTML = svg;
+        box.classList.add('is-ready');
+      } else v.invite.classList.add('is-noqr'); // библиотека не загрузилась: остаётся ссылка
+    };
+    const renderWatch = () => {
+      const el = v.invite.querySelector('[data-watch]');
+      if (!el) return;
+      const n = invite.count;
+      const faces = invite.friends
+        .slice(0, GESTURES.invite.faces)
+        .map((f) => `<span class="invite-face" title="${esc(f.name)}">${esc(f.avatar)}</span>`)
+        .join('');
+      el.innerHTML = `<span class="invite-dot${n ? ' is-live' : ''}" aria-hidden="true"></span><span>Смотрят: <b>${n}</b></span>${faces ? `<span class="invite-faces">${faces}</span>` : ''}`;
+    };
+    const renderInvite = () => {
+      if (view !== v) return;
+      if (!invite.on) {
+        v.inviteUrl = null;
+        v.invite.hidden = true;
+        v.invite.innerHTML = '';
+        v.invite.classList.remove('is-noqr');
+        v.lobby.classList.remove('has-invite');
+        return;
+      }
+      if (v.inviteUrl !== invite.url) {
+        const url = (v.inviteUrl = invite.url);
+        v.invite.classList.remove('is-noqr');
+        v.invite.innerHTML = `
+          <div class="invite-qr" data-qr></div>
+          <div class="invite-body">
+            <h3 class="lobby-title">Позови друга</h3>
+            <p class="invite-text">Друг наводит камеру на QR и ставит против</p>
+            <p class="invite-link">${esc(shortLink(url))}</p>
+            <p class="invite-watch" data-watch aria-live="polite"></p>
+          </div>`;
+        const hit = qrCached(url);
+        if (hit) setQr(hit);
+        else qrFor(url).then((svg) => view === v && v.inviteUrl === url && setQr(svg));
+      }
+      renderWatch();
+      v.invite.hidden = false;
+      v.lobby.classList.add('has-invite');
+    };
+    v.offInvite = invite.subscribe(renderInvite);
+    renderInvite();
+    simCtx = ctx;
 
     // Старт: рука над головой или запасная dwell-кнопка «Старт» (если рука не ловится)
     const startNow = () => {
@@ -199,6 +287,8 @@ export default {
   },
 
   exit() {
+    view?.offInvite?.();
     view = null;
+    simCtx = null;
   },
 };

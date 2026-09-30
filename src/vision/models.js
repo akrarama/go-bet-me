@@ -22,11 +22,45 @@ async function base() {
   return lib;
 }
 
+/**
+ * Файл модели с прогрессом (самая долгая часть первого запуска, 4-8 МБ):
+ * vision:progress {model, loaded, total}, total 0, если сервер не назвал размер.
+ */
+async function fetchModel(name) {
+  const res = await fetch(VISION.models[name]);
+  if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body?.getReader) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  let shown = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    const now = performance.now();
+    if (now - shown > 100) {
+      shown = now;
+      bus.emit('vision:progress', { model: name, loaded, total });
+    }
+  }
+  bus.emit('vision:progress', { model: name, loaded, total: loaded });
+  const out = new Uint8Array(loaded);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+
 async function create(name) {
-  const L = await base();
+  const [L, buffer] = await Promise.all([base(), fetchModel(name)]);
   const [Task, opts] = OPTIONS[name](L);
   const make = (delegate) =>
-    Task.createFromOptions(fileset, { ...opts, runningMode: 'VIDEO', baseOptions: { modelAssetPath: VISION.models[name], delegate } });
+    Task.createFromOptions(fileset, { ...opts, runningMode: 'VIDEO', baseOptions: { modelAssetBuffer: buffer, delegate } });
   try {
     return await make(VISION.delegate);
   } catch (err) {
