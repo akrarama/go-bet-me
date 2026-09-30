@@ -223,7 +223,7 @@ function setup(mod, { target = 10, voice = false } = {}) {
  * Трасса настоящего ролика (fixtures/traces, в git не лежит): кадры → контроллер, 15 fps.
  * Только в jsc (readFile) и только если трасса есть рядом с репо, иначе null.
  */
-function replayTrace(name, mod) {
+function replayTrace(name, mod, prepare = null) {
   let data = null;
   try {
     data = typeof readFile === 'function' ? JSON.parse(readFile(`../fixtures/traces/${name}.json`)) : null;
@@ -232,6 +232,7 @@ function replayTrace(name, mod) {
   }
   if (!data) return null;
   const s = setup(mod, { target: 999 });
+  prepare?.(s);
   const { fps, width, height } = data.input;
   data.frames.forEach((f, i) => {
     const t = 1 + (i * 1000) / fps;
@@ -1087,17 +1088,29 @@ export default (t) => {
   t.test('ready отжимания: упор лёжа готов, стоя и без ног в кадре нет; тексты до 22 символов', (a) => {
     const s = setup(pushup);
     let r = s.probe(hold(pushupPose(TOP), 3));
-    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true]]);
+    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true], ['side', 'Боком к камере', true]]);
     a.eq(r.ok, true);
     a.ok(r.checks.every((c) => c.text.length <= 22), 'text до 22 символов');
     r = s.probe(hold(squatPose(STAND), 3)); // стоит
-    a.deep(byId(r), { body: true, plank: false });
+    a.deep(byId(r), { body: true, plank: false, side: true });
     a.eq(r.ok, false);
     const noAnkles = { 27: { visibility: 0.2 }, 28: { visibility: 0.2 } };
     r = s.probe([pushupPose({ ...TOP, override: noAnkles })]);
-    a.deep(byId(r), { body: false, plank: false });
+    a.deep(byId(r), { body: false, plank: false, side: false });
     r = s.ctrl.ready({ t: s.t, ran: 'pose', width: WIDTH, height: HEIGHT, pose: null }, s.t);
-    a.deep(byId(r), { body: false, plank: false });
+    a.deep(byId(r), { body: false, plank: false, side: false });
+  });
+
+  t.test('ready отжимания: «Боком к камере» только совет, старт не держит', (a) => {
+    const s = setup(pushup);
+    // обе стороны тела видны одинаково (лицом к камере или камера сверху): side ✗, но ok и без подсказки-ошибки
+    const r = s.probe(hold(pushupPose({ ...TOP, farVis: 0.95 }), 3));
+    const side = r.checks.find((c) => c.id === 'side');
+    a.eq(side.ok, false);
+    a.eq(side.soft, true);
+    a.eq(r.ok, true);
+    a.eq(r.hint, null);
+    a.ok(/боком/i.test(r.advice), `совет: ${r.advice}`);
   });
 
   t.test('ready отжимания: чистая проверка, счёт после неё тот же, что без неё', (a) => {
@@ -1237,22 +1250,22 @@ export default (t) => {
   t.test('планка: ready даёт три галочки с подсказками и ничего не шлёт, счёт после него тот же', (a) => {
     const s = setup(plank);
     let r = s.probe(hold(PLANK, 4));
-    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true], ['line', 'Тело ровное', true]]);
+    a.deep(ticks(r), [['body', 'Всё тело в кадре', true], ['plank', 'Упор лёжа', true], ['line', 'Тело ровное', true], ['side', 'Боком к камере', true]]);
     a.eq(r.ok, true);
     a.eq(r.hint, null);
     a.ok(r.checks.every((c) => c.text.length <= 22));
     r = s.probe(hold(squatPose(STAND), 4));
-    a.deep(byId(r), { body: true, plank: false, line: false });
+    a.deep(byId(r), { body: true, plank: false, line: false, side: true });
     a.eq(r.hint, 'Прими упор лёжа, боком к камере');
     r = s.probe(hold(pushupPose({ ...TOP, sag: 0.07 }), 12));
-    a.deep(byId(r), { body: true, plank: true, line: false });
+    a.deep(byId(r), { body: true, plank: true, line: false, side: true });
     a.eq(r.hint, 'Таз провисает, напряги живот, выровняй тело');
     r = s.probe(hold(pushupPose({ ...TOP, sag: -0.07 }), 12));
     a.eq(r.hint, 'Таз задран вверх, опусти таз в линию с плечами');
     r = s.probe(hold(kneesOnFloor(PLANK), 12));
     a.eq(r.hint, 'Колени на полу: подними их, ноги прямые');
     r = s.probe(hold(pushupPose({ ...TOP, override: { 27: { x: 0.998 }, 28: { x: 0.998 } } }), 3));
-    a.deep(byId(r), { body: false, plank: false, line: false });
+    a.deep(byId(r), { body: false, plank: false, line: false, side: false });
     a.eq(r.hint, PLANK_EDGE);
     a.eq(s.events.length, 0, 'ready ничего не шлёт в шину');
     a.eq(s.feedback.current, null, 'ready не пишет подсказку');
@@ -1311,14 +1324,39 @@ export default (t) => {
     a.ok(g.ctrl.count > 0 && g.ctrl.count <= 0.45, `разрыв в 5 с прибавил не больше 0.4 с (${g.ctrl.count})`);
   });
 
-  t.test('ролики отжиманий как «планка с движением»: время идёт в упоре, колени на полу не мерещатся', (a) => {
+  // Время планки идёт, когда руки держат планку (прямые или на локтях); в середине сгибания отжимания (125..145°) нет
+  t.test('ролики отжиманий как «планка с движением»: время идёт в упоре на прямых руках, колени на полу не мерещатся', (a) => {
     const side = replayTrace('pushup-side-short', plank);
     if (!side) return;
-    a.ok(side.ctrl.count > 5 && side.ctrl.count < 8, `pushup-side-short: ${side.ctrl.count.toFixed(1)} с планки`);
+    a.ok(side.ctrl.count > 3 && side.ctrl.count < 6.5, `pushup-side-short: ${side.ctrl.count.toFixed(1)} с планки`);
     a.eq(side.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
     const wide = replayTrace('pushup-horizontal', plank);
-    a.ok(wide.ctrl.count > 15 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
+    a.ok(wide.ctrl.count > 10 && wide.ctrl.count < 25, `pushup-horizontal: ${wide.ctrl.count.toFixed(1)} с планки`);
     a.eq(wide.of('fault').filter((e) => e.code === 'plank_knees').length, 0);
+  });
+
+  // Ролики удержания собраны из настоящего кадра планки (f00001 pushup-side-short с дрожанием 1.5 px, tools: fixtures/mkvideo.swift),
+  // трассы прогнаны через настоящую модель. Провис и задран получены сдвигом столбцов кадра по гауссиане у таза.
+  t.test('ролик планки: 60 с ровной планки: счёт равен времени, ошибок нет, похвалы на 15, 30 и 45 с', (a) => {
+    let calls;
+    const s = replayTrace('plank-hold-60', plank, (q) => { calls = praiseSpy(q); });
+    if (!s) return;
+    a.near(s.ctrl.count, 59.93, 0.15, 'первый кадр время не прибавляет');
+    a.eq(s.of('fault').length, 0);
+    a.deep(calls.map((c) => c.text), ['Корпус ровный, держи', 'Ровная линия, так держать', 'Дыши ровно, держи планку']);
+    a.eq(s.ctrl.summary().extra.bestHoldSec, 59);
+  });
+
+  t.test('ролик планки: сценарий (16 с ровно, 3 с стоя, 6 с ровно, 4 с провис, 20 с ровно, 3 с задран, 12 с ровно): 53 с и три ошибки', (a) => {
+    let calls;
+    const s = replayTrace('plank-scenario', plank, (q) => { calls = praiseSpy(q); });
+    if (!s) return;
+    a.near(s.ctrl.count, 53.1, 0.4, 'идеал 54 с минус паузы на возврат');
+    a.deep(s.of('fault').map((e) => e.code), ['plank_left', 'hip_sag', 'hip_pike']);
+    const sum = s.ctrl.summary();
+    a.deep(sum.faults.map((f) => [f.code, f.count]), [['plank_left', 1], ['hip_sag', 1], ['hip_pike', 1]]);
+    a.ok(sum.extra.bestHoldSec >= 19 && sum.extra.bestHoldSec <= 20, `лучшее удержание ${sum.extra.bestHoldSec} с`);
+    a.deep(calls.map((c) => c.text), ['Корпус ровный, держи', 'Ровная линия, так держать'], 'похвала на 15 с и на 15 с новой серии');
   });
 
   // ─── Настоящие ролики (калибровка порогов) ───

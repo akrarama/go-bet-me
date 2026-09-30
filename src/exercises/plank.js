@@ -3,6 +3,8 @@
 // Правильная планка = упор лёжа по гейту отжиманий (линия плечо-щиколотка почти горизонтальна, кисти на полу)
 // и линия плечо-таз-щиколотка не хуже REPS.pushup.bodyLineMin. Время идёт только в правильной позе:
 // провис таза, задранный таз, колени на полу или уход из упора ставят счёт на паузу.
+// Руки (armsHold): планка на прямых руках (локоть ≥ straightMin, плечи высоко над кистями) или на локтях
+// (локоть 60..125°, плечо над локтем). Лёжа на животе с полусогнутыми руками время не идёт.
 // Режим «Ошибка» (подсказка, красные суставы, событие fault):
 //   таз провис, таз задран (правила отжиманий), колени на полу (колено согнуто и ступни в воздухе за коленями,
 //   держится 1 с: реже путается с потерей ног на краю кадра), вышел из планки (после того, как уже стоял в упоре).
@@ -13,10 +15,31 @@
 
 import { REPS, VISION } from '../config.js';
 import { angle, dist } from '../vision/geometry.js';
-import { alphaFor, createHolds, createSight, drawAngle, PRIORITY } from './reps.js';
-import { GATES as PUSHUP_GATES, RULES as PUSHUP_RULES, isPlank, measure as pushupMeasure } from './pushup.js';
+import { alphaFor, createHolds, createSight, drawAngle, PRIORITY, readyResult, SIDE_CHECK } from './reps.js';
+import { GATES as PUSHUP_GATES, RULES as PUSHUP_RULES, gateFor, isPlank, measure as pushupMeasure } from './pushup.js';
 
 const SIDE_KEYS = ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'];
+
+/** Подсказка, когда тело горизонтально, а руки не держат его как в планке. */
+export const ARMS = { hint: 'Упор на прямые руки или на локти под плечами, грудь от пола' };
+
+/**
+ * Руки держат планку: на прямых руках (локоть ≥ straightMin и плечо над запястьем ≥ straightSupport длин руки)
+ * или на локтях (локоть forearmMin..forearmMax и плечо над локтем ≥ upperArmMin длин руки).
+ * Лёжа на животе и чуть приподняв грудь на полусогнутых руках не проходит ни то ни другое.
+ */
+export function armsHold(m, cfg) {
+  if (m.angle == null) return false;
+  const straight = m.angle >= cfg.straightMin && m.support != null && m.support >= cfg.straightSupport;
+  const forearm = m.angle >= cfg.forearmMin && m.angle <= cfg.forearmMax && m.shoulderOverElbow != null && m.shoulderOverElbow >= cfg.upperArmMin;
+  return straight || forearm;
+}
+
+/** Планка: упор лёжа (как у отжиманий) и руки держат её. */
+export const isPlankHold = (m, cfg) => isPlank(m, cfg) && armsHold(m, cfg);
+
+/** Почему не планка: подсказка отжиманий (лежишь, прими упор) или про руки. */
+export const plankGate = (m, cfg) => (isPlankHold(m, cfg) ? null : gateFor(m, cfg) ?? ARMS);
 const GATE = 'pose_gate'; // код подсказки «прими упор лёжа», пока человек ещё не вставал в планку
 
 export const RULES = {
@@ -45,14 +68,21 @@ const PRAISE = ['Корпус ровный, держи', 'Ровная лини�
 
 /** Положение до старта: те же условия, что пускают время в счёт. Тело в кадре добавляет ready сам. */
 export function readyChecks(m, cfg) {
-  const plank = m != null && isPlank(m, cfg);
+  const plank = m != null && isPlankHold(m, cfg);
   const line = plank && m.body >= cfg.bodyLineMin && !RULES.knees.test(m, cfg);
   let hint = null;
   if (m != null && plank && !line) hint = RULES.knees.test(m, cfg) ? RULES.knees.hint : m.hipBelow > 0 ? RULES.sag.hint : RULES.pike.hint;
   return [
-    { id: 'plank', text: 'Упор лёжа', ok: plank, hint: m != null && !plank ? PUSHUP_GATES.plank.hint : null },
+    { id: 'plank', text: 'Упор лёжа', ok: plank, hint: m != null && !plank ? plankGate(m, cfg).hint : null },
     { id: 'line', text: 'Тело ровное', ok: line, hint },
   ];
+}
+
+/** Мягкая галочка «Боком к камере»: совет, время пойдёт и без неё. */
+function sideCheck(m, lm) {
+  const ok = m != null && SIDE_CHECK.test(m, null, lm);
+  const { id, text, hint } = SIDE_CHECK;
+  return m != null && !ok ? { id, text, ok, hint, soft: true } : { id, text, ok, soft: true };
 }
 
 export function createController({ challenge, bus, feedback, debug }) {
@@ -101,8 +131,13 @@ export function createController({ challenge, bus, feedback, debug }) {
     const knee = lm[idx.knee];
     const ankle = lm[idx.ankle];
     const shin = dist(knee, ankle, aspect);
+    const shoulder = lm[idx.shoulder];
+    const elbow = lm[idx.elbow];
+    const arm = dist(shoulder, elbow, aspect) + dist(elbow, lm[idx.wrist], aspect);
     return {
       ...m,
+      angle: sm('elbow', m.angle), // угол локтя, сглаженный: прямые руки или на локтях (armsHold)
+      shoulderOverElbow: sm('overElbow', arm > 0 ? (elbow.y - shoulder.y) / arm : null), // плечо над локтем, в длинах руки
       knee: sm('knee', angle(hip, knee, ankle, aspect)),
       kneeUp: sm('kneeUp', shin > 0 ? (knee.y - ankle.y) / shin : null),
     };
@@ -129,7 +164,7 @@ export function createController({ challenge, bus, feedback, debug }) {
     if (seen) {
       const m = measure(lm, pick.idx, aspectOf(frame));
       last = { lm, idx: pick.idx, side: pick.side, m };
-      const plank = isPlank(m, cfg);
+      const plank = isPlankHold(m, cfg);
       inPlankMs = plank ? inPlankMs + dt : 0;
       if (inPlankMs >= cfg.standMs) everPlank = true;
       // На коленях таз низко из-за колен, а не из-за спины: тогда «таз провис» не пишем, говорим про колени
@@ -177,7 +212,7 @@ export function createController({ challenge, bus, feedback, debug }) {
       feedback?.hint(top.hint, { code: top.code, priority: PRIORITY.form, joints: jointsOf(top), level: 'warn', speak: true });
       return;
     }
-    if (holds.active(GATE)) feedback?.hint(PUSHUP_GATES.plank.hint, { code: GATE, priority: PRIORITY.visibility, level: 'info', speak: true });
+    if (holds.active(GATE)) feedback?.hint((last?.m ? plankGate(last.m, cfg) : null)?.hint ?? PUSHUP_GATES.plank.hint, { code: GATE, priority: PRIORITY.visibility, level: 'info', speak: true });
   }
 
   function report() {
@@ -223,8 +258,9 @@ export function createController({ challenge, bus, feedback, debug }) {
       const checks = [
         { id: 'body', text: 'Всё тело в кадре', ok: seen, ...(seen ? {} : { hint: sight.hintFor(reason) }) },
         ...readyChecks(m, cfg).map(({ hint, ...check }) => (hint ? { ...check, hint } : check)),
+        sideCheck(m, lm),
       ];
-      return { ok: checks.every((check) => check.ok), checks, hint: checks.find((check) => !check.ok)?.hint ?? null };
+      return readyResult(checks);
     },
 
     stop() {
@@ -244,11 +280,12 @@ export function createController({ challenge, bus, feedback, debug }) {
       const pose = frame.pose;
       if (!pose?.landmarks || frame.t - pose.t > VISION.staleMs) return;
       const highlight = feedback?.highlight ?? new Set();
-      draw.pose(pose.landmarks, { highlight });
+      const shown = draw.smoothPose ? draw.smoothPose(pose) : pose.landmarks; // сглаженные точки: скелет и дуга совпадают
+      draw.pose(shown, { highlight });
       if (!last || last.lm !== pose.landmarks || last.m.body == null) return;
       const { shoulder, hip, ankle } = last.idx;
       const tone = highlight.has(hip) ? 'bad' : counting ? 'deep' : 'idle';
-      drawAngle(draw, pose.landmarks[shoulder], pose.landmarks[hip], pose.landmarks[ankle], last.m.body, tone, null, frame.t);
+      drawAngle(draw, shown[shoulder], shown[hip], shown[ankle], last.m.body, tone, null, frame.t);
     },
   };
   return c;

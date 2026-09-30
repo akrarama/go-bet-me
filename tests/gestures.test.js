@@ -1173,9 +1173,9 @@ export default (t) => {
     a.eq(goalChip('meditation', 60, MEDITATION_DEF), '1 минута');
   });
 
-  t.test('config: у каждого типа есть цели, цель по умолчанию среди них, подписи не пустые (3 типа или 4)', (a) => {
+  t.test('config: у каждого типа есть цели, цель по умолчанию среди них, подписи не пустые (3-8 типов)', (a) => {
     const types = Object.keys(CHALLENGES);
-    a.ok(types.length >= 3 && types.length <= 4, `типов ${types.length}: раскладка SETUP рассчитана на 3-4`);
+    a.ok(types.length >= 3 && types.length <= 8, `типов ${types.length}: раскладка SETUP рассчитана на 3-8`);
     for (const type of types) {
       const def = CHALLENGES[type];
       a.ok(def.targets.length >= 2 && def.targets.length <= 3, `${type}: целей ${def.targets.length}`);
